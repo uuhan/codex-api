@@ -91,6 +91,6 @@ just test       # run tests
 just release    # build the release binary
 just app        # build CodexAPI.app
 just open-app   # build and open CodexAPI.app
-just package    # create dist/CodexAPI-0.1.0-macos.zip
+just package    # create dist/CodexAPI-1.0.0-macos.zip
 just clean      # remove generated artifacts
 ```

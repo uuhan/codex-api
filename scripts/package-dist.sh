@@ -4,7 +4,7 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 APP="$ROOT/CodexAPI.app"
 DIST="$ROOT/dist"
-VERSION="0.1.0"
+VERSION="${VERSION:-1.0.0}"
 ARCHIVE="$DIST/CodexAPI-$VERSION-macos.zip"
 
 cd "$ROOT"
@@ -26,4 +26,3 @@ Use the menu-bar item to run Login OpenAI before sending upstream requests.
 TXT
 
 echo "Built $ARCHIVE"
-

@@ -1,0 +1,55 @@
+name: macOS Release
+
+on:
+  push:
+    tags:
+      - "*"
+
+permissions:
+  contents: write
+
+jobs:
+  package:
+    name: Build macOS package
+    runs-on: macos-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install just
+        run: brew install just
+
+      - name: Resolve version
+        run: |
+          version="${GITHUB_REF_NAME#v}"
+          version="${version//\//-}"
+          echo "VERSION=$version" >> "$GITHUB_ENV"
+
+      - name: Test
+        run: just test
+
+      - name: Package
+        run: just package
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: CodexAPI-${{ env.VERSION }}-macos
+          path: |
+            dist/CodexAPI-${{ env.VERSION }}-macos.zip
+            dist/README.txt
+          if-no-files-found: error
+
+      - name: Publish GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1; then
+            gh release upload "$GITHUB_REF_NAME" dist/CodexAPI-"$VERSION"-macos.zip dist/README.txt --clobber
+          else
+            gh release create "$GITHUB_REF_NAME" dist/CodexAPI-"$VERSION"-macos.zip dist/README.txt \
+              --title "$GITHUB_REF_NAME" \
+              --notes "macOS package for $GITHUB_REF_NAME" \
+              --verify-tag
+          fi
