@@ -124,7 +124,7 @@ enum HTTPParser {
         headers["Content-Length"] = "\(response.body.count)"
         headers["Connection"] = headers["Connection"] ?? "close"
         headers["Access-Control-Allow-Origin"] = headers["Access-Control-Allow-Origin"] ?? "*"
-        headers["Access-Control-Allow-Headers"] = headers["Access-Control-Allow-Headers"] ?? "authorization, content-type, x-codex-beta-features, x-codex-turn-metadata, x-client-request-id, session_id, version, originator"
+        headers["Access-Control-Allow-Headers"] = headers["Access-Control-Allow-Headers"] ?? "authorization, content-type, x-api-key, anthropic-version, anthropic-beta, x-codex-beta-features, x-codex-turn-metadata, x-client-request-id, session_id, version, originator"
         headers["Access-Control-Allow-Methods"] = headers["Access-Control-Allow-Methods"] ?? "GET, POST, OPTIONS"
 
         var head = "HTTP/1.1 \(response.statusCode) \(response.reason)\r\n"
@@ -142,7 +142,7 @@ enum HTTPParser {
         var merged = headers
         merged["Connection"] = merged["Connection"] ?? "close"
         merged["Access-Control-Allow-Origin"] = merged["Access-Control-Allow-Origin"] ?? "*"
-        merged["Access-Control-Allow-Headers"] = merged["Access-Control-Allow-Headers"] ?? "authorization, content-type, x-codex-beta-features, x-codex-turn-metadata, x-client-request-id, session_id, version, originator"
+        merged["Access-Control-Allow-Headers"] = merged["Access-Control-Allow-Headers"] ?? "authorization, content-type, x-api-key, anthropic-version, anthropic-beta, x-codex-beta-features, x-codex-turn-metadata, x-client-request-id, session_id, version, originator"
         merged["Access-Control-Allow-Methods"] = merged["Access-Control-Allow-Methods"] ?? "GET, POST, OPTIONS"
 
         var head = "HTTP/1.1 \(statusCode) \(reason)\r\n"
@@ -183,4 +183,3 @@ public enum ProxyError: Error, CustomStringConvertible, Sendable {
         }
     }
 }
-

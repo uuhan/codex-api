@@ -37,6 +37,24 @@ final class ModelCatalogTests: XCTestCase {
         XCTAssertEqual(settings.effectiveModelIDs, ["custom-model"])
     }
 
+    func testAnthropicModelObjectUsesAnthropicShape() {
+        let model = CodexModelDescriptor(
+            id: "gpt-5.5",
+            created: 1_776_902_400,
+            displayName: "GPT 5.5",
+            version: "gpt-5.5"
+        )
+
+        let object = model.anthropicModelObject
+
+        XCTAssertEqual(object["id"] as? String, "gpt-5.5")
+        XCTAssertEqual(object["type"] as? String, "model")
+        XCTAssertEqual(object["display_name"] as? String, "GPT 5.5")
+        XCTAssertEqual(object["created_at"] as? String, "2026-04-23T00:00:00Z")
+        XCTAssertNil(object["object"])
+        XCTAssertNil(object["created"])
+    }
+
     private func idToken(planType: String) throws -> String {
         let payload: JSONObject = [
             "email": "user@example.com",

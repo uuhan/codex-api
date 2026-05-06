@@ -66,6 +66,21 @@ public struct CodexModelDescriptor: Equatable, Sendable {
         }
         return object
     }
+
+    public var anthropicModelObject: JSONObject {
+        [
+            "id": id,
+            "type": "model",
+            "display_name": displayName.isEmpty ? id : displayName,
+            "created_at": Self.iso8601DateString(fromUnixTimestamp: created)
+        ]
+    }
+
+    private static func iso8601DateString(fromUnixTimestamp timestamp: Int) -> String {
+        let formatter = ISO8601DateFormatter()
+        formatter.formatOptions = [.withInternetDateTime]
+        return formatter.string(from: Date(timeIntervalSince1970: TimeInterval(timestamp)))
+    }
 }
 
 public enum CodexModelCatalog {

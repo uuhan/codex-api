@@ -155,7 +155,7 @@ public final class CodexProxyServer: @unchecked Sendable {
                 "upstream": currentSettings.normalizedUpstreamBaseURL
             ])
         case ("GET", "/v1/models"):
-            return try jsonResponse(modelsPayload(settings: currentSettings))
+            return try jsonResponse(isAnthropicRequest(request) ? anthropicModelsPayload(settings: currentSettings) : modelsPayload(settings: currentSettings))
         case ("POST", "/v1/responses"):
             return try await handleResponses(request, settings: currentSettings, connection: connection, compact: false)
         case ("POST", "/v1/responses/compact"):
@@ -164,6 +164,10 @@ public final class CodexProxyServer: @unchecked Sendable {
             return try await handleChatCompletions(request, settings: currentSettings, connection: connection)
         case ("POST", "/v1/completions"):
             return try await handleCompletions(request, settings: currentSettings, connection: connection)
+        case ("POST", "/v1/messages"):
+            return try await handleAnthropicMessages(request, settings: currentSettings, connection: connection)
+        case ("POST", "/v1/messages/count_tokens"):
+            return try handleAnthropicCountTokens(request)
         default:
             throw ProxyError.notFound
         }
@@ -275,6 +279,33 @@ public final class CodexProxyServer: @unchecked Sendable {
         return try await handleChatCompletions(replacement, settings: settings, connection: connection)
     }
 
+    private func handleAnthropicMessages(_ request: HTTPRequest, settings: ProxySettings, connection: NWConnection) async throws -> HTTPResponse? {
+        let original = try JSONHelper.object(from: request.body)
+        let model = JSONHelper.string(original["model"]) ?? settings.defaultModelID
+        let clientWantsStream = JSONHelper.bool(original["stream"])
+        let upstreamBody = AnthropicCompatTranslator.messagesToCodex(original, model: model, stream: true)
+
+        if clientWantsStream {
+            try await streamAnthropicMessages(upstreamBody: upstreamBody, originalRequest: original, model: model, request: request, settings: settings, connection: connection)
+            return nil
+        }
+
+        let response = try await upstream.data(settings: settings, request: request, path: "/responses", body: upstreamBody, stream: true)
+        guard response.statusCode >= 200 && response.statusCode < 300 else {
+            throw ProxyError.upstreamStatus(response.statusCode, response.body)
+        }
+        let completed = try completedEvent(from: response.body)
+        guard let message = AnthropicCompatTranslator.messageObject(fromCompletedEvent: completed, originalRequest: original, requestedModel: model) else {
+            throw ProxyError.network("upstream stream ended before response.completed")
+        }
+        return try jsonResponse(message)
+    }
+
+    private func handleAnthropicCountTokens(_ request: HTTPRequest) throws -> HTTPResponse {
+        let original = try JSONHelper.object(from: request.body)
+        return try jsonResponse(AnthropicCompatTranslator.tokenCountObject(for: original))
+    }
+
     private func streamResponses(upstreamBody: JSONObject, request: HTTPRequest, settings: ProxySettings, connection: NWConnection) async throws {
         let stream = try await upstream.stream(settings: settings, request: request, path: "/responses", body: upstreamBody)
         guard stream.statusCode >= 200 && stream.statusCode < 300 else {
@@ -361,6 +392,48 @@ public final class CodexProxyServer: @unchecked Sendable {
         try await connection.sendData(Data("data: [DONE]\n\n".utf8))
     }
 
+    private func streamAnthropicMessages(upstreamBody: JSONObject, originalRequest: JSONObject, model: String, request: HTTPRequest, settings: ProxySettings, connection: NWConnection) async throws {
+        let stream = try await upstream.stream(settings: settings, request: request, path: "/responses", body: upstreamBody)
+        guard stream.statusCode >= 200 && stream.statusCode < 300 else {
+            var body = Data()
+            for try await byte in stream.bytes {
+                body.append(byte)
+            }
+            throw ProxyError.upstreamStatus(stream.statusCode, body)
+        }
+
+        let headers = [
+            "Content-Type": "text/event-stream",
+            "Cache-Control": "no-cache"
+        ]
+        try await connection.sendData(HTTPParser.streamHeader(headers: headers))
+
+        var decoder = SSEDecoder()
+        var accumulator = CodexCompletedAccumulator()
+        var translator = AnthropicStreamTranslator(requestedModel: model, originalRequest: originalRequest)
+        for try await byte in stream.bytes {
+            for frame in decoder.append(Data([byte])) {
+                guard let payload = try? JSONHelper.object(from: frame.data) else {
+                    continue
+                }
+                let patched = accumulator.observe(payload)
+                for translated in try translator.translate(payload: patched) {
+                    try await connection.sendData(translated.serialized())
+                }
+            }
+        }
+        for frame in decoder.flush() {
+            guard let payload = try? JSONHelper.object(from: frame.data) else {
+                continue
+            }
+            let patched = accumulator.observe(payload)
+            for translated in try translator.translate(payload: patched) {
+                try await connection.sendData(translated.serialized())
+            }
+        }
+        try await connection.sendData(Data("\n".utf8))
+    }
+
     private func completedEvent(from data: Data) throws -> JSONObject {
         if let object = try? JSONHelper.object(from: data),
            JSONHelper.string(object["type"]) == "response.completed" {
@@ -390,6 +463,29 @@ public final class CodexProxyServer: @unchecked Sendable {
             "object": "list",
             "data": settings.effectiveModelDescriptors.map(\.openAIModelObject)
         ]
+    }
+
+    private func anthropicModelsPayload(settings: ProxySettings) -> JSONObject {
+        let models = settings.effectiveModelDescriptors
+            .filter { !$0.supportedParameters.isEmpty }
+            .map(\.anthropicModelObject)
+        return [
+            "data": models,
+            "has_more": false,
+            "first_id": JSONHelper.string(models.first?["id"]) ?? "",
+            "last_id": JSONHelper.string(models.last?["id"]) ?? ""
+        ]
+    }
+
+    private func isAnthropicRequest(_ request: HTTPRequest) -> Bool {
+        if request.header("anthropic-version") != nil || request.header("anthropic-beta") != nil {
+            return true
+        }
+        if request.header("x-api-key") != nil {
+            return true
+        }
+        let userAgent = (request.header("user-agent") ?? "").lowercased()
+        return userAgent.hasPrefix("claude-cli") || userAgent.contains("claude-code") || userAgent.contains("@anthropic-ai/")
     }
 
     private func settingsSnapshot() -> ProxySettings {

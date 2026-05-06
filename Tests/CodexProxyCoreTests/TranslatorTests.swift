@@ -198,6 +198,106 @@ final class TranslatorTests: XCTestCase {
         XCTAssertEqual(first["requested_model"] as? String, "gpt-5.3-codex")
     }
 
+    func testAnthropicMessagesRequestMapsToCodexInputAndTools() throws {
+        let request = try object("""
+        {
+          "model": "gpt-5.5",
+          "system": [{"type": "text", "text": "Be concise."}],
+          "messages": [
+            {"role": "user", "content": "Weather?"},
+            {
+              "role": "assistant",
+              "content": [
+                {"type": "text", "text": "Checking."},
+                {"type": "tool_use", "id": "toolu_1", "name": "get_weather", "input": {"city": "Paris"}}
+              ]
+            },
+            {
+              "role": "user",
+              "content": [
+                {"type": "tool_result", "tool_use_id": "toolu_1", "content": [{"type": "text", "text": "sunny"}]}
+              ]
+            }
+          ],
+          "tools": [
+            {
+              "name": "get_weather",
+              "description": "Get weather",
+              "input_schema": {"type": "object"}
+            }
+          ],
+          "tool_choice": {"type": "tool", "name": "get_weather"},
+          "stream": true
+        }
+        """)
+
+        let output = AnthropicCompatTranslator.messagesToCodex(request, model: "gpt-5.5", stream: true)
+
+        XCTAssertEqual(output["model"] as? String, "gpt-5.5")
+        XCTAssertEqual(output["stream"] as? Bool, true)
+        let input = try XCTUnwrap(output["input"] as? [Any])
+        XCTAssertEqual((input[0] as? JSONObject)?["role"] as? String, "developer")
+        XCTAssertEqual((input[1] as? JSONObject)?["role"] as? String, "user")
+        XCTAssertEqual((input[3] as? JSONObject)?["type"] as? String, "function_call")
+        XCTAssertEqual((input[3] as? JSONObject)?["arguments"] as? String, "{\"city\":\"Paris\"}")
+        XCTAssertEqual((input[4] as? JSONObject)?["type"] as? String, "function_call_output")
+        XCTAssertEqual(((output["tools"] as? [Any])?.first as? JSONObject)?["type"] as? String, "function")
+        XCTAssertEqual((output["tool_choice"] as? JSONObject)?["name"] as? String, "get_weather")
+    }
+
+    func testAnthropicMessageObjectMapsCodexCompletedEvent() throws {
+        let request = try object("""
+        {
+          "model": "gpt-5.5",
+          "tools": [{"name": "get_weather", "input_schema": {"type": "object"}}]
+        }
+        """)
+        let event = try object("""
+        {
+          "type": "response.completed",
+          "response": {
+            "id": "resp_1",
+            "model": "gpt-5.5",
+            "usage": {"input_tokens": 10, "output_tokens": 3, "input_tokens_details": {"cached_tokens": 4}},
+            "output": [
+              {"type": "message", "role": "assistant", "content": [{"type": "output_text", "text": "done"}]},
+              {"type": "function_call", "call_id": "call_1", "name": "get_weather", "arguments": "{\\"city\\":\\"Paris\\"}"}
+            ]
+          }
+        }
+        """)
+
+        let output = try XCTUnwrap(AnthropicCompatTranslator.messageObject(fromCompletedEvent: event, originalRequest: request, requestedModel: "gpt-5.5"))
+
+        XCTAssertEqual(output["type"] as? String, "message")
+        XCTAssertEqual(output["stop_reason"] as? String, "tool_use")
+        let usage = try XCTUnwrap(output["usage"] as? JSONObject)
+        XCTAssertEqual(usage["input_tokens"] as? Int, 6)
+        XCTAssertEqual(usage["cache_read_input_tokens"] as? Int, 4)
+        let content = try XCTUnwrap(output["content"] as? [Any])
+        XCTAssertEqual((content[0] as? JSONObject)?["type"] as? String, "text")
+        XCTAssertEqual((content[1] as? JSONObject)?["type"] as? String, "tool_use")
+    }
+
+    func testAnthropicStreamTranslatorEmitsMessageEvents() throws {
+        var translator = AnthropicStreamTranslator(requestedModel: "gpt-5.5", originalRequest: ["model": "gpt-5.5"])
+
+        let created = try translator.translate(payload: object("""
+        {"type":"response.created","response":{"id":"resp_1","model":"gpt-5.5"}}
+        """))
+        let text = try translator.translate(payload: object("""
+        {"type":"response.output_text.delta","delta":"hi"}
+        """))
+        let done = try translator.translate(payload: object("""
+        {"type":"response.completed","response":{"id":"resp_1","model":"gpt-5.5","usage":{"input_tokens":1,"output_tokens":1}}}
+        """))
+
+        XCTAssertEqual(created.first?.event, "message_start")
+        XCTAssertEqual(text.first?.event, "content_block_start")
+        XCTAssertTrue(done.contains { $0.event == "message_delta" })
+        XCTAssertTrue(done.contains { $0.event == "message_stop" })
+    }
+
     private func object(_ string: String) throws -> JSONObject {
         try JSONHelper.object(from: Data(string.utf8))
     }
