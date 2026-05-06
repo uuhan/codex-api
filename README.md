@@ -1,5 +1,7 @@
 # CodexAPI
 
+![](./docs/menu.png)
+
 Native macOS tray app for a local Codex reverse proxy.
 
 The proxy exposes OpenAI-compatible local endpoints and forwards requests to the
