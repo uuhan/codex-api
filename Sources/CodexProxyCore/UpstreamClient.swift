@@ -22,7 +22,13 @@ final class UpstreamClient: @unchecked Sendable {
     func data(settings: ProxySettings, request: HTTPRequest, path: String, body: JSONObject, stream: Bool) async throws -> UpstreamResponse {
         var upstreamRequest = try makeRequest(settings: settings, request: request, path: path, body: body, stream: stream)
         upstreamRequest.timeoutInterval = 600
-        let (data, response) = try await session.data(for: upstreamRequest)
+        let data: Data
+        let response: URLResponse
+        do {
+            (data, response) = try await session.data(for: upstreamRequest)
+        } catch {
+            throw ProxyError.network(Self.transportErrorMessage(error, url: upstreamRequest.url))
+        }
         guard let http = response as? HTTPURLResponse else {
             throw ProxyError.network("upstream did not return HTTP response")
         }
@@ -31,7 +37,13 @@ final class UpstreamClient: @unchecked Sendable {
 
     func stream(settings: ProxySettings, request: HTTPRequest, path: String, body: JSONObject) async throws -> UpstreamStream {
         let upstreamRequest = try makeRequest(settings: settings, request: request, path: path, body: body, stream: true)
-        let (bytes, response) = try await session.bytes(for: upstreamRequest)
+        let bytes: URLSession.AsyncBytes
+        let response: URLResponse
+        do {
+            (bytes, response) = try await session.bytes(for: upstreamRequest)
+        } catch {
+            throw ProxyError.network(Self.transportErrorMessage(error, url: upstreamRequest.url))
+        }
         guard let http = response as? HTTPURLResponse else {
             throw ProxyError.network("upstream did not return HTTP response")
         }
@@ -109,5 +121,25 @@ final class UpstreamClient: @unchecked Sendable {
             }
         }
         return headers
+    }
+
+    static func transportErrorMessage(_ error: Error, url: URL?) -> String {
+        let destination = url?.host.map { " connecting to \($0)" } ?? ""
+        if let urlError = error as? URLError {
+            switch urlError.code {
+            case .secureConnectionFailed,
+                 .serverCertificateHasBadDate,
+                 .serverCertificateHasUnknownRoot,
+                 .serverCertificateNotYetValid,
+                 .serverCertificateUntrusted,
+                 .clientCertificateRejected,
+                 .clientCertificateRequired,
+                 .appTransportSecurityRequiresSecureConnection:
+                return "upstream TLS error\(destination): \(urlError.localizedDescription)"
+            default:
+                return "upstream network error\(destination): \(urlError.localizedDescription)"
+            }
+        }
+        return "upstream network error\(destination): \(error.localizedDescription)"
     }
 }
