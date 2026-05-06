@@ -27,16 +27,25 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     private func configureStatusItem() {
-        let item = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
+        let item = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
         if let button = item.button {
-            if let image = NSImage(systemSymbolName: "network", accessibilityDescription: "CodexAPI") {
-                image.isTemplate = true
+            if let image = trayIconImage() {
                 button.image = image
             } else {
                 button.title = "Codex"
             }
+            button.imagePosition = .imageOnly
         }
         statusItem = item
+    }
+
+    private func trayIconImage() -> NSImage? {
+        let image = NSImage(named: NSImage.Name("TrayIcon")) ??
+            Bundle.main.url(forResource: "TrayIcon", withExtension: "png").flatMap { NSImage(contentsOf: $0) }
+        image?.size = NSSize(width: 18, height: 18)
+        image?.isTemplate = false
+        image?.accessibilityDescription = "CodexAPI"
+        return image
     }
 
     private func rebuildMenu() {

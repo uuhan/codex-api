@@ -9,9 +9,12 @@ cd "$ROOT"
 swift build -c release
 
 rm -rf "$APP"
-mkdir -p "$APP/Contents/MacOS"
+mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
 cp "$BINARY" "$APP/Contents/MacOS/CodexAPI"
 chmod +x "$APP/Contents/MacOS/CodexAPI"
+cp "$ROOT/Resources/CodexAPI.icns" "$APP/Contents/Resources/CodexAPI.icns"
+cp "$ROOT/Resources/TrayIcon.png" "$APP/Contents/Resources/TrayIcon.png"
+cp "$ROOT/Resources/TrayIcon@2x.png" "$APP/Contents/Resources/TrayIcon@2x.png"
 
 cat > "$APP/Contents/Info.plist" <<'PLIST'
 <?xml version="1.0" encoding="UTF-8"?>
@@ -22,6 +25,8 @@ cat > "$APP/Contents/Info.plist" <<'PLIST'
   <string>CodexAPI</string>
   <key>CFBundleIdentifier</key>
   <string>ai.xu.codex-api</string>
+  <key>CFBundleIconFile</key>
+  <string>CodexAPI</string>
   <key>CFBundleName</key>
   <string>CodexAPI</string>
   <key>CFBundlePackageType</key>
@@ -44,4 +49,3 @@ cat > "$APP/Contents/Info.plist" <<'PLIST'
 PLIST
 
 echo "Built $APP"
-
