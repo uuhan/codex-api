@@ -43,7 +43,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let image = NSImage(named: NSImage.Name("TrayIcon")) ??
             Bundle.main.url(forResource: "TrayIcon", withExtension: "png").flatMap { NSImage(contentsOf: $0) }
         image?.size = NSSize(width: 18, height: 18)
-        image?.isTemplate = false
+        image?.isTemplate = true
         image?.accessibilityDescription = "CodexAPI"
         return image
     }
