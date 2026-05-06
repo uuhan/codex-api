@@ -19,7 +19,7 @@ local reference and is ignored by git.
 ## Run
 
 ```bash
-swift run CodexAPI
+just run
 ```
 
 Open the tray menu and choose `Login OpenAI` to run the Codex OAuth flow in
@@ -48,9 +48,22 @@ The OAuth flow follows the Codex CLI-style PKCE flow used by `CLIProxyAPI`:
 ## Build an app bundle
 
 ```bash
-scripts/build-app.sh
+just app
 open CodexAPI.app
 ```
 
 The generated app bundle is a menu-bar-only app (`LSUIElement=true`) and is not
 tracked by git.
+
+## Build and package
+
+`just` is the project build entrypoint:
+
+```bash
+just test       # run tests
+just release    # build the release binary
+just app        # build CodexAPI.app
+just open-app   # build and open CodexAPI.app
+just package    # create dist/CodexAPI-0.1.0-macos.zip
+just clean      # remove generated artifacts
+```
