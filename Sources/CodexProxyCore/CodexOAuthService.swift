@@ -211,18 +211,8 @@ public final class CodexOAuthService: @unchecked Sendable {
         return value.addingPercentEncoding(withAllowedCharacters: allowed) ?? value
     }
 
-    public func parseIDToken(_ token: String) -> (accountID: String, email: String) {
-        let parts = token.split(separator: ".")
-        guard parts.count == 3,
-              let payload = base64URLDecode(String(parts[1])),
-              let object = try? JSONHelper.object(from: payload) else {
-            return ("", "")
-        }
-        let auth = JSONHelper.object(object["https://api.openai.com/auth"])
-        return (
-            JSONHelper.string(auth?["chatgpt_account_id"]) ?? "",
-            JSONHelper.string(object["email"]) ?? ""
-        )
+    public func parseIDToken(_ token: String) -> (accountID: String, email: String, planType: String) {
+        ProxySettings.idTokenClaims(token)
     }
 
     private func generateCodeVerifier() throws -> String {
@@ -249,17 +239,6 @@ public final class CodexOAuthService: @unchecked Sendable {
             .replacingOccurrences(of: "+", with: "-")
             .replacingOccurrences(of: "/", with: "_")
             .replacingOccurrences(of: "=", with: "")
-    }
-
-    private func base64URLDecode(_ value: String) -> Data? {
-        var string = value
-            .replacingOccurrences(of: "-", with: "+")
-            .replacingOccurrences(of: "_", with: "/")
-        let remainder = string.count % 4
-        if remainder > 0 {
-            string += String(repeating: "=", count: 4 - remainder)
-        }
-        return Data(base64Encoded: string)
     }
 
     private func secondsValue(_ value: Any?) -> Int? {

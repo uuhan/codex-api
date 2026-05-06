@@ -49,7 +49,7 @@ public struct ProxySettings: Codable, Equatable, Sendable {
         proxyKey: String = "",
         defaultUserAgent: String = "codex_cli_rs/0.118.0 (Mac OS 26.3.1; arm64) iTerm.app/3.6.9",
         originator: String = "codex_cli_rs",
-        modelIDs: [String] = ["gpt-5-codex", "gpt-5.1-codex", "gpt-5.2"],
+        modelIDs: [String] = CodexModelCatalog.defaultModelIDs,
         injectImageGenerationTool: Bool = true
     ) {
         self.listenHost = listenHost
@@ -85,7 +85,7 @@ public struct ProxySettings: Codable, Equatable, Sendable {
             proxyKey: try container.decodeIfPresent(String.self, forKey: .proxyKey) ?? "",
             defaultUserAgent: try container.decodeIfPresent(String.self, forKey: .defaultUserAgent) ?? "codex_cli_rs/0.118.0 (Mac OS 26.3.1; arm64) iTerm.app/3.6.9",
             originator: try container.decodeIfPresent(String.self, forKey: .originator) ?? "codex_cli_rs",
-            modelIDs: try container.decodeIfPresent([String].self, forKey: .modelIDs) ?? ["gpt-5-codex", "gpt-5.1-codex", "gpt-5.2"],
+            modelIDs: try container.decodeIfPresent([String].self, forKey: .modelIDs) ?? CodexModelCatalog.defaultModelIDs,
             injectImageGenerationTool: try container.decodeIfPresent(Bool.self, forKey: .injectImageGenerationTool) ?? true
         )
     }
@@ -96,6 +96,30 @@ public struct ProxySettings: Codable, Equatable, Sendable {
 
     public var openAIBaseURL: String {
         "\(baseURL)/v1"
+    }
+
+    public var codexPlanType: String {
+        Self.idTokenClaims(idToken).planType
+    }
+
+    public var usesAutomaticModelCatalog: Bool {
+        CodexModelCatalog.isAutomaticModelList(modelIDs)
+    }
+
+    public var effectiveModelDescriptors: [CodexModelDescriptor] {
+        CodexModelCatalog.models(modelIDs: modelIDs, planType: codexPlanType)
+    }
+
+    public var effectiveModelIDs: [String] {
+        effectiveModelDescriptors.map(\.id)
+    }
+
+    public var defaultModelID: String {
+        let modelIDs = effectiveModelIDs
+        if modelIDs.contains(CodexModelCatalog.defaultModelID) {
+            return CodexModelCatalog.defaultModelID
+        }
+        return modelIDs.first ?? CodexModelCatalog.defaultModelID
     }
 
     public var normalizedUpstreamBaseURL: String {
@@ -125,6 +149,32 @@ public struct ProxySettings: Codable, Equatable, Sendable {
         accountEmail = ""
         tokenExpiresAt = nil
         lastRefreshAt = nil
+    }
+
+    public static func idTokenClaims(_ token: String) -> (accountID: String, email: String, planType: String) {
+        let parts = token.split(separator: ".")
+        guard parts.count == 3,
+              let payload = base64URLDecode(String(parts[1])),
+              let object = try? JSONHelper.object(from: payload) else {
+            return ("", "", "")
+        }
+        let auth = JSONHelper.object(object["https://api.openai.com/auth"])
+        return (
+            JSONHelper.string(auth?["chatgpt_account_id"]) ?? "",
+            JSONHelper.string(object["email"]) ?? "",
+            JSONHelper.string(auth?["chatgpt_plan_type"]) ?? ""
+        )
+    }
+
+    private static func base64URLDecode(_ value: String) -> Data? {
+        var string = value
+            .replacingOccurrences(of: "-", with: "+")
+            .replacingOccurrences(of: "_", with: "/")
+        let remainder = string.count % 4
+        if remainder > 0 {
+            string += String(repeating: "=", count: 4 - remainder)
+        }
+        return Data(base64Encoded: string)
     }
 }
 

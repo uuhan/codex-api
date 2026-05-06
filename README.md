@@ -45,6 +45,14 @@ The OAuth flow follows the Codex CLI-style PKCE flow used by `CLIProxyAPI`:
 - redirect: `http://localhost:1455/auth/callback` by default
 - scope: `openid email profile offline_access`
 
+`GET /v1/models` uses the local Codex model catalog. If the stored settings still
+contain the old default models, the app treats them as automatic and exposes the
+current catalog instead. When the OAuth `id_token` includes a ChatGPT plan type,
+the automatic catalog follows that plan.
+
+The tray menu also includes `Copy Claude Code Config`, which copies shell
+environment variables for launching Claude Code against the local proxy.
+
 ## Build an app bundle
 
 ```bash

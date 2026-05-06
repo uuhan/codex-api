@@ -196,7 +196,7 @@ public final class CodexProxyServer: @unchecked Sendable {
 
     private func handleResponses(_ request: HTTPRequest, settings: ProxySettings, connection: NWConnection, compact: Bool) async throws -> HTTPResponse? {
         let original = try JSONHelper.object(from: request.body)
-        let model = JSONHelper.string(original["model"]) ?? settings.modelIDs.first ?? "gpt-5-codex"
+        let model = JSONHelper.string(original["model"]) ?? settings.defaultModelID
         let clientWantsStream = JSONHelper.bool(original["stream"])
         let upstreamPath = compact ? "/responses/compact" : "/responses"
         var upstreamBody = OpenAICompatTranslator.responsesToCodex(original, model: model, stream: !compact)
@@ -227,7 +227,7 @@ public final class CodexProxyServer: @unchecked Sendable {
 
     private func handleChatCompletions(_ request: HTTPRequest, settings: ProxySettings, connection: NWConnection) async throws -> HTTPResponse? {
         let original = try JSONHelper.object(from: request.body)
-        let model = JSONHelper.string(original["model"]) ?? settings.modelIDs.first ?? "gpt-5-codex"
+        let model = JSONHelper.string(original["model"]) ?? settings.defaultModelID
         let clientWantsStream = JSONHelper.bool(original["stream"])
         var upstreamBody = OpenAICompatTranslator.chatCompletionsToCodex(original, model: model, stream: true)
         if settings.injectImageGenerationTool {
@@ -251,7 +251,7 @@ public final class CodexProxyServer: @unchecked Sendable {
         let original = try JSONHelper.object(from: request.body)
         let prompt = JSONHelper.string(original["prompt"]) ?? "Complete this:"
         var chat: JSONObject = [
-            "model": JSONHelper.string(original["model"]) ?? settings.modelIDs.first ?? "gpt-5-codex",
+            "model": JSONHelper.string(original["model"]) ?? settings.defaultModelID,
             "stream": JSONHelper.bool(original["stream"]),
             "messages": [[
                 "role": "user",
@@ -385,14 +385,7 @@ public final class CodexProxyServer: @unchecked Sendable {
     private func modelsPayload(settings: ProxySettings) -> JSONObject {
         [
             "object": "list",
-            "data": settings.modelIDs.map { model in
-                [
-                    "id": model,
-                    "object": "model",
-                    "created": 0,
-                    "owned_by": "openai"
-                ]
-            }
+            "data": settings.effectiveModelDescriptors.map(\.openAIModelObject)
         ]
     }
 

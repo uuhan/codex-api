@@ -25,7 +25,8 @@ final class OAuthTests: XCTestCase {
         let payload: JSONObject = [
             "email": "user@example.com",
             "https://api.openai.com/auth": [
-                "chatgpt_account_id": "acc_123"
+                "chatgpt_account_id": "acc_123",
+                "chatgpt_plan_type": "plus"
             ]
         ]
         let token = [
@@ -37,6 +38,7 @@ final class OAuthTests: XCTestCase {
         let parsed = service.parseIDToken(token)
         XCTAssertEqual(parsed.accountID, "acc_123")
         XCTAssertEqual(parsed.email, "user@example.com")
+        XCTAssertEqual(parsed.planType, "plus")
     }
 
     private func base64URL(_ data: Data) -> String {
@@ -47,4 +49,3 @@ final class OAuthTests: XCTestCase {
             .replacingOccurrences(of: "=", with: "")
     }
 }
-

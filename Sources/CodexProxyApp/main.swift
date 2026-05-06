@@ -55,6 +55,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         menu.addItem(makeMenuItem("Restart Proxy", action: #selector(restartProxy), keyEquivalent: "r"))
         menu.addItem(makeMenuItem("Copy Base URL", action: #selector(copyBaseURL), keyEquivalent: "c"))
+        menu.addItem(makeMenuItem("Copy Claude Code Config", action: #selector(copyClaudeCodeConfig)))
         menu.addItem(makeMenuItem(model.settings.hasOAuthSession ? "Refresh OpenAI Token" : "Login OpenAI", action: model.settings.hasOAuthSession ? #selector(refreshOpenAIToken) : #selector(loginOpenAI)))
         menu.addItem(makeMenuItem("Settings", action: #selector(openSettings), keyEquivalent: ","))
 
@@ -91,6 +92,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     @objc private func copyBaseURL() {
         NSPasteboard.general.clearContents()
         NSPasteboard.general.setString(model.settings.openAIBaseURL, forType: .string)
+    }
+
+    @objc private func copyClaudeCodeConfig() {
+        model.copyClaudeCodeConfig()
     }
 
     @objc private func loginOpenAI() {
@@ -221,6 +226,12 @@ final class AppModel: ObservableObject {
         logger.append(.info, "OpenAI OAuth session cleared")
     }
 
+    func copyClaudeCodeConfig() {
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(claudeCodeConfigSnippet(), forType: .string)
+        logger.append(.info, "Claude Code config copied")
+    }
+
     private func applyOAuthTokens(_ tokens: CodexOAuthTokenBundle) {
         settings.applyOAuthTokens(tokens)
         store.save(settings)
@@ -247,6 +258,29 @@ final class AppModel: ObservableObject {
         } catch {
             logger.append(.error, "refresh failed: \(error)")
         }
+    }
+
+    private func claudeCodeConfigSnippet() -> String {
+        let localToken = settings.proxyKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            ? "codex-api-local"
+            : settings.proxyKey.trimmingCharacters(in: .whitespacesAndNewlines)
+        let mainModel = settings.defaultModelID
+        let fastModel = settings.effectiveModelIDs.contains("gpt-5.3-codex-spark")
+            ? "gpt-5.3-codex-spark"
+            : mainModel
+
+        return [
+            "export ANTHROPIC_BASE_URL=\(shellQuote(settings.baseURL))",
+            "export ANTHROPIC_AUTH_TOKEN=\(shellQuote(localToken))",
+            "export ANTHROPIC_API_KEY=\(shellQuote(localToken))",
+            "export ANTHROPIC_MODEL=\(shellQuote(mainModel))",
+            "export ANTHROPIC_SMALL_FAST_MODEL=\(shellQuote(fastModel))",
+            "claude"
+        ].joined(separator: "\n")
+    }
+
+    private func shellQuote(_ value: String) -> String {
+        "'\(value.replacingOccurrences(of: "'", with: "'\\''"))'"
     }
 }
 
@@ -353,7 +387,7 @@ struct SettingsView: View {
         .padding(18)
         .onAppear {
             portText = "\(model.settings.listenPort)"
-            modelsText = model.settings.modelIDs.joined(separator: ", ")
+            modelsText = model.settings.effectiveModelIDs.joined(separator: ", ")
         }
     }
 }
