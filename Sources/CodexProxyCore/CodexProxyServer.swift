@@ -219,7 +219,7 @@ public final class CodexProxyServer: @unchecked Sendable {
         }
 
         let completed = try completedEvent(from: response.body)
-        guard let responseObject = OpenAICompatTranslator.responseObject(fromCompletedEvent: completed) else {
+        guard let responseObject = OpenAICompatTranslator.responseObject(fromCompletedEvent: completed, requestedModel: model) else {
             throw ProxyError.network("upstream stream ended before response.completed")
         }
         return try jsonResponse(responseObject)
@@ -291,6 +291,7 @@ public final class CodexProxyServer: @unchecked Sendable {
         ]
         try await connection.sendData(HTTPParser.streamHeader(headers: headers))
 
+        let requestedModel = JSONHelper.string(upstreamBody["model"]) ?? settings.defaultModelID
         var decoder = SSEDecoder()
         var accumulator = CodexCompletedAccumulator()
         for try await byte in stream.bytes {
@@ -300,7 +301,8 @@ public final class CodexProxyServer: @unchecked Sendable {
                     continue
                 }
                 let patched = accumulator.observe(payload)
-                try await connection.sendData(SSEFrame(event: frame.event, data: try JSONHelper.data(patched)).serialized())
+                let annotated = OpenAICompatTranslator.responseEventWithRequestedModel(patched, requestedModel: requestedModel)
+                try await connection.sendData(SSEFrame(event: frame.event, data: try JSONHelper.data(annotated)).serialized())
             }
         }
         for frame in decoder.flush() {
@@ -309,7 +311,8 @@ public final class CodexProxyServer: @unchecked Sendable {
                 continue
             }
             let patched = accumulator.observe(payload)
-            try await connection.sendData(SSEFrame(event: frame.event, data: try JSONHelper.data(patched)).serialized())
+            let annotated = OpenAICompatTranslator.responseEventWithRequestedModel(patched, requestedModel: requestedModel)
+            try await connection.sendData(SSEFrame(event: frame.event, data: try JSONHelper.data(annotated)).serialized())
         }
         try await connection.sendData(Data("\n".utf8))
     }

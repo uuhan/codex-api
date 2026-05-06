@@ -114,8 +114,91 @@ final class TranslatorTests: XCTestCase {
         XCTAssertEqual((output["usage"] as? JSONObject)?["total_tokens"] as? Int, 12)
     }
 
+    func testChatCompletionExposesActualAndRequestedModels() throws {
+        let event = try object("""
+        {
+          "type": "response.completed",
+          "response": {
+            "id": "resp_1",
+            "created_at": 1700000000,
+            "model": "gpt-5.4",
+            "status": "completed",
+            "output": [
+              {"type": "message", "content": [{"type": "output_text", "text": "done"}], "role": "assistant"}
+            ]
+          }
+        }
+        """)
+
+        let output = OpenAICompatTranslator.chatCompletion(fromCompletedEvent: event, originalRequest: ["model": "gpt-5.3-codex"])
+
+        XCTAssertEqual(output["model"] as? String, "gpt-5.4")
+        XCTAssertEqual(output["requested_model"] as? String, "gpt-5.3-codex")
+    }
+
+    func testResponseObjectExposesActualAndRequestedModels() throws {
+        let event = try object("""
+        {
+          "type": "response.completed",
+          "response": {
+            "id": "resp_1",
+            "model": "gpt-5.4",
+            "output": []
+          }
+        }
+        """)
+
+        let response = try XCTUnwrap(OpenAICompatTranslator.responseObject(fromCompletedEvent: event, requestedModel: "gpt-5.3-codex"))
+
+        XCTAssertEqual(response["model"] as? String, "gpt-5.4")
+        XCTAssertEqual(response["requested_model"] as? String, "gpt-5.3-codex")
+    }
+
+    func testResponseEventExposesActualAndRequestedModels() throws {
+        let event = try object("""
+        {
+          "type": "response.created",
+          "response": {
+            "id": "resp_1",
+            "model": "gpt-5.4",
+            "output": []
+          }
+        }
+        """)
+
+        let output = OpenAICompatTranslator.responseEventWithRequestedModel(event, requestedModel: "gpt-5.3-codex")
+        let response = try XCTUnwrap(output["response"] as? JSONObject)
+
+        XCTAssertEqual(response["model"] as? String, "gpt-5.4")
+        XCTAssertEqual(response["requested_model"] as? String, "gpt-5.3-codex")
+    }
+
+    func testChatStreamExposesActualAndRequestedModels() throws {
+        var translator = ChatStreamTranslator(requestModel: "gpt-5.3-codex", originalRequest: ["model": "gpt-5.3-codex"])
+
+        _ = translator.translate(payload: try object("""
+        {
+          "type": "response.created",
+          "response": {
+            "id": "resp_1",
+            "created_at": 1700000000,
+            "model": "gpt-5.4"
+          }
+        }
+        """))
+        let chunks = translator.translate(payload: try object("""
+        {
+          "type": "response.output_text.delta",
+          "delta": "hi"
+        }
+        """))
+
+        let first = try XCTUnwrap(chunks.first)
+        XCTAssertEqual(first["model"] as? String, "gpt-5.4")
+        XCTAssertEqual(first["requested_model"] as? String, "gpt-5.3-codex")
+    }
+
     private func object(_ string: String) throws -> JSONObject {
         try JSONHelper.object(from: Data(string.utf8))
     }
 }
-

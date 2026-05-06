@@ -357,7 +357,7 @@ struct ChatStreamTranslator {
     }
 
     private func baseChunk() -> JSONObject {
-        [
+        var chunk: JSONObject = [
             "id": responseID,
             "object": "chat.completion.chunk",
             "created": createdAt,
@@ -369,6 +369,10 @@ struct ChatStreamTranslator {
                 "native_finish_reason": NSNull()
             ]]
         ]
+        if !requestModel.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            chunk["requested_model"] = requestModel
+        }
+        return chunk
     }
 
     private func restoredToolName(_ name: String) -> String {

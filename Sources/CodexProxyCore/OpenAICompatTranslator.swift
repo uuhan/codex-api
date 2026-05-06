@@ -210,6 +210,9 @@ public enum OpenAICompatTranslator {
                 "native_finish_reason": finishReason
             ]]
         ]
+        if let requestedModel = normalizedModel(JSONHelper.string(originalRequest["model"])) {
+            result["requested_model"] = requestedModel
+        }
 
         if let usage = chatUsage(from: JSONHelper.object(response["usage"])) {
             result["usage"] = usage
@@ -217,8 +220,25 @@ public enum OpenAICompatTranslator {
         return result
     }
 
-    public static func responseObject(fromCompletedEvent event: JSONObject) -> JSONObject? {
-        JSONHelper.object(event["response"])
+    public static func responseObject(fromCompletedEvent event: JSONObject, requestedModel: String? = nil) -> JSONObject? {
+        guard var response = JSONHelper.object(event["response"]) else {
+            return nil
+        }
+        if let requestedModel = normalizedModel(requestedModel) {
+            response["requested_model"] = requestedModel
+        }
+        return response
+    }
+
+    public static func responseEventWithRequestedModel(_ event: JSONObject, requestedModel: String) -> JSONObject {
+        guard let requestedModel = normalizedModel(requestedModel),
+              var response = JSONHelper.object(event["response"]) else {
+            return event
+        }
+        var output = event
+        response["requested_model"] = requestedModel
+        output["response"] = response
+        return output
     }
 
     private static func codexInputItems(fromChatMessage message: JSONObject, toolNameMap: [String: String]) -> [Any] {
@@ -257,6 +277,14 @@ public enum OpenAICompatTranslator {
         }
 
         return items
+    }
+
+    private static func normalizedModel(_ model: String?) -> String? {
+        guard let model else {
+            return nil
+        }
+        let trimmed = model.trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed.isEmpty ? nil : trimmed
     }
 
     private static func chatContentParts(from content: Any?, role: String) -> [Any] {
