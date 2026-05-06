@@ -7,8 +7,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private let store = SettingsStore()
     private let logger = ProxyLogger()
     private let oauthService = CodexOAuthService()
+    private let rateLimitService = CodexRateLimitService()
     private lazy var server = CodexProxyServer(logger: logger, oauthService: oauthService)
-    private lazy var model = AppModel(store: store, server: server, logger: logger, oauthService: oauthService)
+    private lazy var model = AppModel(store: store, server: server, logger: logger, oauthService: oauthService, rateLimitService: rateLimitService)
     private var statusItem: NSStatusItem?
     private var settingsWindow: NSWindow?
 
@@ -17,6 +18,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         configureStatusItem()
         model.start()
         model.refreshOAuthIfNeeded()
+        model.refreshRateLimits()
         rebuildMenu()
 
         model.onChange = { [weak self] in
@@ -52,9 +54,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let menu = NSMenu()
         let status = model.status
 
-        let statusItem = NSMenuItem(title: status.isRunning ? "Running \(status.baseURL)" : "Stopped", action: nil, keyEquivalent: "")
-        statusItem.isEnabled = false
-        menu.addItem(statusItem)
+        menu.addItem(makeRateLimitsMenuItem())
+        let refreshLimitsItem = makeMenuItem(model.isRefreshingRateLimits ? "Refreshing Limits..." : "Refresh Limits", action: #selector(refreshRateLimits))
+        refreshLimitsItem.isEnabled = !model.isRefreshingRateLimits
+        menu.addItem(refreshLimitsItem)
 
         menu.addItem(NSMenuItem.separator())
         if status.isRunning {
@@ -68,8 +71,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         menu.addItem(makeMenuItem(model.settings.hasOAuthSession ? "Refresh OpenAI Token" : "Login OpenAI", action: model.settings.hasOAuthSession ? #selector(refreshOpenAIToken) : #selector(loginOpenAI)))
         menu.addItem(makeMenuItem("Settings", action: #selector(openSettings), keyEquivalent: ","))
 
+        menu.addItem(NSMenuItem.separator())
+        let statusItem = NSMenuItem(title: status.isRunning ? "Running \(status.baseURL)" : "Stopped", action: nil, keyEquivalent: "")
+        statusItem.isEnabled = false
+        menu.addItem(statusItem)
         if let latest = model.logs.last {
-            menu.addItem(NSMenuItem.separator())
             let logItem = NSMenuItem(title: "\(latest.level.rawValue): \(latest.message)", action: nil, keyEquivalent: "")
             logItem.isEnabled = false
             menu.addItem(logItem)
@@ -83,6 +89,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private func makeMenuItem(_ title: String, action: Selector, keyEquivalent: String = "") -> NSMenuItem {
         let item = NSMenuItem(title: title, action: action, keyEquivalent: keyEquivalent)
         item.target = self
+        return item
+    }
+
+    private func makeRateLimitsMenuItem() -> NSMenuItem {
+        let item = NSMenuItem()
+        let view = NSHostingView(
+            rootView: RateLimitsMenuView(
+                rows: model.rateLimitMenuRows(),
+                footer: model.rateLimitUpdatedDisplay()
+            )
+        )
+        view.frame = NSRect(x: 0, y: 0, width: 280, height: 92)
+        item.view = view
         return item
     }
 
@@ -115,6 +134,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         model.refreshOAuthIfNeeded(force: true)
     }
 
+    @objc private func refreshRateLimits() {
+        model.refreshRateLimits()
+    }
+
     @objc private func openSettings() {
         if settingsWindow == nil {
             let view = SettingsView(model: model)
@@ -122,7 +145,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             let window = NSWindow(contentViewController: hosting)
             window.title = "CodexAPI"
             window.styleMask = [.titled, .closable, .miniaturizable]
-            window.setContentSize(NSSize(width: 560, height: 520))
+            window.setContentSize(NSSize(width: 580, height: 640))
             window.isReleasedWhenClosed = false
             settingsWindow = window
         }
@@ -147,6 +170,10 @@ final class AppModel: ObservableObject {
     @Published var settings: ProxySettings
     @Published var status: ProxyRuntimeStatus
     @Published var logs: [ProxyLogEntry] = []
+    @Published var rateLimits: CodexRateLimits?
+    @Published var rateLimitsUpdatedAt: Date?
+    @Published var rateLimitsError: String?
+    @Published var isRefreshingRateLimits = false
 
     var onChange: (() -> Void)?
 
@@ -154,12 +181,20 @@ final class AppModel: ObservableObject {
     private let server: CodexProxyServer
     private let logger: ProxyLogger
     private let oauthService: CodexOAuthService
+    private let rateLimitService: CodexRateLimitService
+    private let shortTimeFormatter: DateFormatter = {
+        let formatter = DateFormatter()
+        formatter.dateStyle = .none
+        formatter.timeStyle = .short
+        return formatter
+    }()
 
-    init(store: SettingsStore, server: CodexProxyServer, logger: ProxyLogger, oauthService: CodexOAuthService) {
+    init(store: SettingsStore, server: CodexProxyServer, logger: ProxyLogger, oauthService: CodexOAuthService, rateLimitService: CodexRateLimitService) {
         self.store = store
         self.server = server
         self.logger = logger
         self.oauthService = oauthService
+        self.rateLimitService = rateLimitService
         self.settings = store.load()
         self.status = server.currentStatus()
         self.logs = logger.snapshot()
@@ -228,10 +263,20 @@ final class AppModel: ObservableObject {
         }
     }
 
+    func refreshRateLimits() {
+        Task {
+            await loadRateLimits()
+        }
+    }
+
     func logoutOpenAI() {
         settings.clearOAuthTokens()
+        rateLimits = nil
+        rateLimitsUpdatedAt = nil
+        rateLimitsError = nil
         store.save(settings)
         server.update(settings: settings)
+        onChange?()
         logger.append(.info, "OpenAI OAuth session cleared")
     }
 
@@ -247,6 +292,7 @@ final class AppModel: ObservableObject {
         server.update(settings: settings)
         let label = tokens.email.isEmpty ? tokens.accountID : tokens.email
         logger.append(.info, "OpenAI OAuth token saved\(label.isEmpty ? "" : " for \(label)")")
+        refreshRateLimits()
     }
 
     private func refreshOAuth(force: Bool) async {
@@ -267,6 +313,79 @@ final class AppModel: ObservableObject {
         } catch {
             logger.append(.error, "refresh failed: \(error)")
         }
+    }
+
+    private func loadRateLimits() async {
+        if isRefreshingRateLimits {
+            return
+        }
+        isRefreshingRateLimits = true
+        onChange?()
+        defer {
+            isRefreshingRateLimits = false
+            onChange?()
+        }
+
+        await refreshOAuth(force: false)
+
+        do {
+            let fetched = try await rateLimitService.fetch(settings: settings)
+            rateLimits = fetched
+            rateLimitsUpdatedAt = Date()
+            rateLimitsError = nil
+            logger.append(.info, "rate limits refreshed")
+        } catch ProxyError.missingUpstreamToken {
+            rateLimits = nil
+            rateLimitsUpdatedAt = nil
+            rateLimitsError = "Login required"
+        } catch {
+            rateLimitsError = "\(error)"
+            logger.append(.warning, "rate limits unavailable: \(error)")
+        }
+    }
+
+    func rateLimitDisplay(_ window: CodexRateLimitWindow?) -> String {
+        guard let window else {
+            return rateLimitsError ?? "Unavailable"
+        }
+        var parts = [String(format: "%.0f%% left", window.remainingPercent)]
+        if let resetsAt = window.resetsAt {
+            parts.append("resets \(shortTimeFormatter.string(from: resetsAt))")
+        }
+        return parts.joined(separator: ", ")
+    }
+
+    func rateLimitUpdatedDisplay() -> String {
+        guard let rateLimitsUpdatedAt else {
+            return rateLimitsError ?? "Not loaded"
+        }
+        return "Updated \(shortTimeFormatter.string(from: rateLimitsUpdatedAt))"
+    }
+
+    func rateLimitMenuRows() -> [RateLimitMenuRowState] {
+        let snapshot = rateLimits?.codexSnapshot
+        return [
+            rateLimitMenuRow(title: "5h", window: snapshot?.primary),
+            rateLimitMenuRow(title: "1 week", window: snapshot?.secondary)
+        ]
+    }
+
+    private func rateLimitMenuRow(title: String, window: CodexRateLimitWindow?) -> RateLimitMenuRowState {
+        guard let window else {
+            return RateLimitMenuRowState(
+                title: title,
+                remainingPercent: nil,
+                detail: rateLimitsError ?? "Not loaded",
+                resetText: nil
+            )
+        }
+
+        return RateLimitMenuRowState(
+            title: title,
+            remainingPercent: window.remainingPercent,
+            detail: String(format: "%.0f%% left", window.remainingPercent),
+            resetText: window.resetsAt.map { "resets \(shortTimeFormatter.string(from: $0))" }
+        )
     }
 
     private func claudeCodeConfigSnippet() -> String {
@@ -290,105 +409,212 @@ final class AppModel: ObservableObject {
     }
 }
 
+struct RateLimitMenuRowState: Identifiable, Equatable {
+    var title: String
+    var remainingPercent: Double?
+    var detail: String
+    var resetText: String?
+
+    var id: String {
+        title
+    }
+}
+
+struct RateLimitsMenuView: View {
+    var rows: [RateLimitMenuRowState]
+    var footer: String
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            ForEach(rows) { row in
+                RateLimitMenuRowView(row: row)
+            }
+
+            Text(footer)
+                .font(.caption2)
+                .foregroundStyle(.secondary)
+                .lineLimit(1)
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 8)
+        .frame(width: 280, height: 92, alignment: .leading)
+    }
+}
+
+private struct RateLimitMenuRowView: View {
+    var row: RateLimitMenuRowState
+
+    var body: some View {
+        HStack(alignment: .center, spacing: 8) {
+            Text(row.title)
+                .font(.caption)
+                .frame(width: 48, alignment: .leading)
+
+            VStack(alignment: .leading, spacing: 2) {
+                HStack(spacing: 6) {
+                    Text(row.detail)
+                        .font(.caption)
+                    if let resetText = row.resetText {
+                        Text(resetText)
+                            .font(.caption2)
+                            .foregroundStyle(.secondary)
+                    }
+                }
+                .lineLimit(1)
+
+                ProgressView(value: row.remainingPercent ?? 0, total: 100)
+                    .progressViewStyle(.linear)
+                    .tint(progressTint)
+                    .opacity(row.remainingPercent == nil ? 0.35 : 1)
+            }
+        }
+    }
+
+    private var progressTint: Color {
+        guard let remainingPercent = row.remainingPercent else {
+            return .gray
+        }
+        if remainingPercent <= 10 {
+            return .red
+        }
+        if remainingPercent <= 30 {
+            return .orange
+        }
+        return .accentColor
+    }
+}
+
 struct SettingsView: View {
     @ObservedObject var model: AppModel
     @State private var portText: String = ""
     @State private var modelsText: String = ""
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 14) {
-            HStack {
-                Text(model.status.isRunning ? "Running" : "Stopped")
-                    .font(.headline)
-                Spacer()
-                Button("Copy URL") {
-                    NSPasteboard.general.clearContents()
-                    NSPasteboard.general.setString(model.settings.openAIBaseURL, forType: .string)
+        ScrollView {
+            VStack(alignment: .leading, spacing: 14) {
+                HStack {
+                    Text(model.status.isRunning ? "Running" : "Stopped")
+                        .font(.headline)
+                    Spacer()
+                    Button("Copy URL") {
+                        NSPasteboard.general.clearContents()
+                        NSPasteboard.general.setString(model.settings.openAIBaseURL, forType: .string)
+                    }
                 }
-            }
 
-            Grid(alignment: .leading, horizontalSpacing: 12, verticalSpacing: 10) {
-                GridRow {
-                    Text("Listen Host")
-                    TextField("127.0.0.1", text: $model.settings.listenHost)
+                Grid(alignment: .leading, horizontalSpacing: 12, verticalSpacing: 10) {
+                    GridRow {
+                        Text("Listen Host")
+                        TextField("127.0.0.1", text: $model.settings.listenHost)
+                    }
+                    GridRow {
+                        Text("Listen Port")
+                        TextField("1455", text: $portText)
+                            .onChange(of: portText) { value in
+                                if let port = UInt16(value) {
+                                    model.settings.listenPort = port
+                                }
+                            }
+                    }
+                    GridRow {
+                        Text("Upstream")
+                        TextField("https://chatgpt.com/backend-api/codex", text: $model.settings.upstreamBaseURL)
+                    }
+                    GridRow {
+                        Text("Token")
+                        SecureField("Bearer token", text: $model.settings.authToken)
+                    }
+                    GridRow {
+                        Text("OpenAI Account")
+                        Text(model.settings.accountEmail.isEmpty ? (model.settings.accountID.isEmpty ? "Not logged in" : model.settings.accountID) : model.settings.accountEmail)
+                            .foregroundStyle(.secondary)
+                    }
+                    GridRow {
+                        Text("Account ID")
+                        TextField("optional", text: $model.settings.accountID)
+                    }
+                    GridRow {
+                        Text("Proxy Key")
+                        SecureField("optional", text: $model.settings.proxyKey)
+                    }
+                    GridRow {
+                        Text("Models")
+                        TextField("comma separated", text: $modelsText)
+                            .onChange(of: modelsText) { value in
+                                model.settings.modelIDs = value
+                                    .split(separator: ",")
+                                    .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+                                    .filter { !$0.isEmpty }
+                            }
+                    }
                 }
-                GridRow {
-                    Text("Listen Port")
-                    TextField("1455", text: $portText)
-                        .onChange(of: portText) { value in
-                            if let port = UInt16(value) {
-                                model.settings.listenPort = port
+
+                GroupBox("Limits") {
+                    VStack(alignment: .leading, spacing: 10) {
+                        Grid(alignment: .leading, horizontalSpacing: 12, verticalSpacing: 8) {
+                            GridRow {
+                                Text("5h")
+                                Text(model.rateLimitDisplay(model.rateLimits?.codexSnapshot?.primary))
+                                    .foregroundStyle(.secondary)
+                            }
+                            GridRow {
+                                Text("1 week")
+                                Text(model.rateLimitDisplay(model.rateLimits?.codexSnapshot?.secondary))
+                                    .foregroundStyle(.secondary)
                             }
                         }
-                }
-                GridRow {
-                    Text("Upstream")
-                    TextField("https://chatgpt.com/backend-api/codex", text: $model.settings.upstreamBaseURL)
-                }
-                GridRow {
-                    Text("Token")
-                    SecureField("Bearer token", text: $model.settings.authToken)
-                }
-                GridRow {
-                    Text("OpenAI Account")
-                    Text(model.settings.accountEmail.isEmpty ? (model.settings.accountID.isEmpty ? "Not logged in" : model.settings.accountID) : model.settings.accountEmail)
-                        .foregroundStyle(.secondary)
-                }
-                GridRow {
-                    Text("Account ID")
-                    TextField("optional", text: $model.settings.accountID)
-                }
-                GridRow {
-                    Text("Proxy Key")
-                    SecureField("optional", text: $model.settings.proxyKey)
-                }
-                GridRow {
-                    Text("Models")
-                    TextField("comma separated", text: $modelsText)
-                        .onChange(of: modelsText) { value in
-                            model.settings.modelIDs = value
-                                .split(separator: ",")
-                                .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
-                                .filter { !$0.isEmpty }
+
+                        HStack {
+                            Text(model.rateLimitUpdatedDisplay())
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                            Spacer()
+                            Button(model.isRefreshingRateLimits ? "Refreshing..." : "Refresh Limits") {
+                                model.refreshRateLimits()
+                            }
+                            .disabled(model.isRefreshingRateLimits)
                         }
-                }
-            }
-
-            Toggle("Inject image_generation tool", isOn: $model.settings.injectImageGenerationTool)
-
-            Divider()
-
-            HStack {
-                Button(model.status.isRunning ? "Stop" : "Start") {
-                    if model.status.isRunning {
-                        model.stop()
-                    } else {
-                        model.start()
                     }
+                    .frame(maxWidth: .infinity, alignment: .leading)
                 }
-                Button("Save & Restart") {
-                    model.saveAndRestart()
-                }
-                Button(model.settings.hasOAuthSession ? "Refresh Login" : "Login OpenAI") {
+
+                Toggle("Inject image_generation tool", isOn: $model.settings.injectImageGenerationTool)
+
+                Divider()
+
+                HStack {
+                    Button(model.status.isRunning ? "Stop" : "Start") {
+                        if model.status.isRunning {
+                            model.stop()
+                        } else {
+                            model.start()
+                        }
+                    }
+                    Button("Save & Restart") {
+                        model.saveAndRestart()
+                    }
+                    Button(model.settings.hasOAuthSession ? "Refresh Login" : "Login OpenAI") {
+                        if model.settings.hasOAuthSession {
+                            model.refreshOAuthIfNeeded(force: true)
+                        } else {
+                            model.loginOpenAI()
+                        }
+                    }
                     if model.settings.hasOAuthSession {
-                        model.refreshOAuthIfNeeded(force: true)
-                    } else {
-                        model.loginOpenAI()
+                        Button("Logout") {
+                            model.logoutOpenAI()
+                        }
                     }
+                    Spacer()
                 }
-                if model.settings.hasOAuthSession {
-                    Button("Logout") {
-                        model.logoutOpenAI()
-                    }
-                }
-                Spacer()
-            }
 
-            List(model.logs.suffix(8)) { entry in
-                Text("[\(entry.level.rawValue)] \(entry.message)")
-                    .lineLimit(2)
+                List(model.logs.suffix(8)) { entry in
+                    Text("[\(entry.level.rawValue)] \(entry.message)")
+                        .lineLimit(2)
+                }
+                .frame(height: 140)
             }
-            .frame(height: 140)
+            .frame(maxWidth: .infinity, alignment: .leading)
         }
         .padding(18)
         .onAppear {
