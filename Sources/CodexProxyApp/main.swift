@@ -1,0 +1,359 @@
+import AppKit
+import CodexProxyCore
+import SwiftUI
+
+@MainActor
+final class AppDelegate: NSObject, NSApplicationDelegate {
+    private let store = SettingsStore()
+    private let logger = ProxyLogger()
+    private let oauthService = CodexOAuthService()
+    private lazy var server = CodexProxyServer(logger: logger, oauthService: oauthService)
+    private lazy var model = AppModel(store: store, server: server, logger: logger, oauthService: oauthService)
+    private var statusItem: NSStatusItem?
+    private var settingsWindow: NSWindow?
+
+    func applicationDidFinishLaunching(_ notification: Notification) {
+        NSApp.setActivationPolicy(.accessory)
+        configureStatusItem()
+        model.start()
+        model.refreshOAuthIfNeeded()
+        rebuildMenu()
+
+        model.onChange = { [weak self] in
+            DispatchQueue.main.async {
+                self?.rebuildMenu()
+            }
+        }
+    }
+
+    private func configureStatusItem() {
+        let item = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
+        if let button = item.button {
+            if let image = NSImage(systemSymbolName: "network", accessibilityDescription: "CodexAPI") {
+                image.isTemplate = true
+                button.image = image
+            } else {
+                button.title = "Codex"
+            }
+        }
+        statusItem = item
+    }
+
+    private func rebuildMenu() {
+        let menu = NSMenu()
+        let status = model.status
+
+        let statusItem = NSMenuItem(title: status.isRunning ? "Running \(status.baseURL)" : "Stopped", action: nil, keyEquivalent: "")
+        statusItem.isEnabled = false
+        menu.addItem(statusItem)
+
+        menu.addItem(NSMenuItem.separator())
+        if status.isRunning {
+            menu.addItem(makeMenuItem("Stop Proxy", action: #selector(stopProxy)))
+        } else {
+            menu.addItem(makeMenuItem("Start Proxy", action: #selector(startProxy)))
+        }
+        menu.addItem(makeMenuItem("Restart Proxy", action: #selector(restartProxy), keyEquivalent: "r"))
+        menu.addItem(makeMenuItem("Copy Base URL", action: #selector(copyBaseURL), keyEquivalent: "c"))
+        menu.addItem(makeMenuItem(model.settings.hasOAuthSession ? "Refresh OpenAI Token" : "Login OpenAI", action: model.settings.hasOAuthSession ? #selector(refreshOpenAIToken) : #selector(loginOpenAI)))
+        menu.addItem(makeMenuItem("Settings", action: #selector(openSettings), keyEquivalent: ","))
+
+        if let latest = model.logs.last {
+            menu.addItem(NSMenuItem.separator())
+            let logItem = NSMenuItem(title: "\(latest.level.rawValue): \(latest.message)", action: nil, keyEquivalent: "")
+            logItem.isEnabled = false
+            menu.addItem(logItem)
+        }
+
+        menu.addItem(NSMenuItem.separator())
+        menu.addItem(makeMenuItem("Quit", action: #selector(quit), keyEquivalent: "q"))
+        self.statusItem?.menu = menu
+    }
+
+    private func makeMenuItem(_ title: String, action: Selector, keyEquivalent: String = "") -> NSMenuItem {
+        let item = NSMenuItem(title: title, action: action, keyEquivalent: keyEquivalent)
+        item.target = self
+        return item
+    }
+
+    @objc private func startProxy() {
+        model.start()
+    }
+
+    @objc private func stopProxy() {
+        model.stop()
+    }
+
+    @objc private func restartProxy() {
+        model.restart()
+    }
+
+    @objc private func copyBaseURL() {
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(model.settings.openAIBaseURL, forType: .string)
+    }
+
+    @objc private func loginOpenAI() {
+        model.loginOpenAI()
+    }
+
+    @objc private func refreshOpenAIToken() {
+        model.refreshOAuthIfNeeded(force: true)
+    }
+
+    @objc private func openSettings() {
+        if settingsWindow == nil {
+            let view = SettingsView(model: model)
+            let hosting = NSHostingController(rootView: view)
+            let window = NSWindow(contentViewController: hosting)
+            window.title = "CodexAPI"
+            window.styleMask = [.titled, .closable, .miniaturizable]
+            window.setContentSize(NSSize(width: 560, height: 520))
+            window.isReleasedWhenClosed = false
+            settingsWindow = window
+        }
+        settingsWindow?.center()
+        settingsWindow?.makeKeyAndOrderFront(nil)
+        NSApp.activate(ignoringOtherApps: true)
+    }
+
+    @objc private func quit() {
+        model.stop()
+        NSApp.terminate(nil)
+    }
+}
+
+let app = NSApplication.shared
+let delegate = MainActor.assumeIsolated { AppDelegate() }
+app.delegate = delegate
+app.run()
+
+@MainActor
+final class AppModel: ObservableObject {
+    @Published var settings: ProxySettings
+    @Published var status: ProxyRuntimeStatus
+    @Published var logs: [ProxyLogEntry] = []
+
+    var onChange: (() -> Void)?
+
+    private let store: SettingsStore
+    private let server: CodexProxyServer
+    private let logger: ProxyLogger
+    private let oauthService: CodexOAuthService
+
+    init(store: SettingsStore, server: CodexProxyServer, logger: ProxyLogger, oauthService: CodexOAuthService) {
+        self.store = store
+        self.server = server
+        self.logger = logger
+        self.oauthService = oauthService
+        self.settings = store.load()
+        self.status = server.currentStatus()
+        self.logs = logger.snapshot()
+
+        self.server.onStatusChange = { [weak self] status in
+            Task { @MainActor in
+                self?.status = status
+                self?.onChange?()
+            }
+        }
+        self.logger.onChange = { [weak self] entries in
+            Task { @MainActor in
+                self?.logs = entries
+                self?.onChange?()
+            }
+        }
+        self.server.onOAuthLogin = { [weak self] tokens in
+            Task { @MainActor in
+                self?.applyOAuthTokens(tokens)
+            }
+        }
+    }
+
+    func start() {
+        do {
+            try server.start(settings: settings)
+        } catch {
+            logger.append(.error, "start failed: \(error)")
+        }
+    }
+
+    func stop() {
+        server.stop()
+    }
+
+    func restart() {
+        stop()
+        start()
+    }
+
+    func saveAndRestart() {
+        store.save(settings)
+        restart()
+    }
+
+    func loginOpenAI() {
+        if !status.isRunning {
+            start()
+        }
+        if settings.listenPort != 1455 {
+            logger.append(.warning, "OpenAI OAuth redirect uses local port \(settings.listenPort); 1455 is the known CLIProxyAPI default.")
+        }
+        do {
+            let redirectURI = oauthService.redirectURI(for: settings)
+            let url = try oauthService.beginLogin(redirectURI: redirectURI)
+            logger.append(.info, "opening OpenAI OAuth login")
+            NSWorkspace.shared.open(url)
+        } catch {
+            logger.append(.error, "login failed: \(error)")
+        }
+    }
+
+    func refreshOAuthIfNeeded(force: Bool = false) {
+        Task {
+            await refreshOAuth(force: force)
+        }
+    }
+
+    func logoutOpenAI() {
+        settings.clearOAuthTokens()
+        store.save(settings)
+        server.update(settings: settings)
+        logger.append(.info, "OpenAI OAuth session cleared")
+    }
+
+    private func applyOAuthTokens(_ tokens: CodexOAuthTokenBundle) {
+        settings.applyOAuthTokens(tokens)
+        store.save(settings)
+        server.update(settings: settings)
+        let label = tokens.email.isEmpty ? tokens.accountID : tokens.email
+        logger.append(.info, "OpenAI OAuth token saved\(label.isEmpty ? "" : " for \(label)")")
+    }
+
+    private func refreshOAuth(force: Bool) async {
+        guard !settings.refreshToken.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            if force {
+                logger.append(.warning, "no OpenAI refresh token is available")
+            }
+            return
+        }
+        if !force, let expiresAt = settings.tokenExpiresAt, expiresAt > Date().addingTimeInterval(5 * 60) {
+            return
+        }
+
+        do {
+            let tokens = try await oauthService.refreshTokens(refreshToken: settings.refreshToken)
+            applyOAuthTokens(tokens)
+            logger.append(.info, "OpenAI OAuth token refreshed")
+        } catch {
+            logger.append(.error, "refresh failed: \(error)")
+        }
+    }
+}
+
+struct SettingsView: View {
+    @ObservedObject var model: AppModel
+    @State private var portText: String = ""
+    @State private var modelsText: String = ""
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            HStack {
+                Text(model.status.isRunning ? "Running" : "Stopped")
+                    .font(.headline)
+                Spacer()
+                Button("Copy URL") {
+                    NSPasteboard.general.clearContents()
+                    NSPasteboard.general.setString(model.settings.openAIBaseURL, forType: .string)
+                }
+            }
+
+            Grid(alignment: .leading, horizontalSpacing: 12, verticalSpacing: 10) {
+                GridRow {
+                    Text("Listen Host")
+                    TextField("127.0.0.1", text: $model.settings.listenHost)
+                }
+                GridRow {
+                    Text("Listen Port")
+                    TextField("1455", text: $portText)
+                        .onChange(of: portText) { value in
+                            if let port = UInt16(value) {
+                                model.settings.listenPort = port
+                            }
+                        }
+                }
+                GridRow {
+                    Text("Upstream")
+                    TextField("https://chatgpt.com/backend-api/codex", text: $model.settings.upstreamBaseURL)
+                }
+                GridRow {
+                    Text("Token")
+                    SecureField("Bearer token", text: $model.settings.authToken)
+                }
+                GridRow {
+                    Text("OpenAI Account")
+                    Text(model.settings.accountEmail.isEmpty ? (model.settings.accountID.isEmpty ? "Not logged in" : model.settings.accountID) : model.settings.accountEmail)
+                        .foregroundStyle(.secondary)
+                }
+                GridRow {
+                    Text("Account ID")
+                    TextField("optional", text: $model.settings.accountID)
+                }
+                GridRow {
+                    Text("Proxy Key")
+                    SecureField("optional", text: $model.settings.proxyKey)
+                }
+                GridRow {
+                    Text("Models")
+                    TextField("comma separated", text: $modelsText)
+                        .onChange(of: modelsText) { value in
+                            model.settings.modelIDs = value
+                                .split(separator: ",")
+                                .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+                                .filter { !$0.isEmpty }
+                        }
+                }
+            }
+
+            Toggle("Inject image_generation tool", isOn: $model.settings.injectImageGenerationTool)
+
+            Divider()
+
+            HStack {
+                Button(model.status.isRunning ? "Stop" : "Start") {
+                    if model.status.isRunning {
+                        model.stop()
+                    } else {
+                        model.start()
+                    }
+                }
+                Button("Save & Restart") {
+                    model.saveAndRestart()
+                }
+                Button(model.settings.hasOAuthSession ? "Refresh Login" : "Login OpenAI") {
+                    if model.settings.hasOAuthSession {
+                        model.refreshOAuthIfNeeded(force: true)
+                    } else {
+                        model.loginOpenAI()
+                    }
+                }
+                if model.settings.hasOAuthSession {
+                    Button("Logout") {
+                        model.logoutOpenAI()
+                    }
+                }
+                Spacer()
+            }
+
+            List(model.logs.suffix(8)) { entry in
+                Text("[\(entry.level.rawValue)] \(entry.message)")
+                    .lineLimit(2)
+            }
+            .frame(height: 140)
+        }
+        .padding(18)
+        .onAppear {
+            portText = "\(model.settings.listenPort)"
+            modelsText = model.settings.modelIDs.joined(separator: ", ")
+        }
+    }
+}

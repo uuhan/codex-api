@@ -1,0 +1,56 @@
+# CodexAPI
+
+Native macOS tray app for a local Codex reverse proxy.
+
+The proxy exposes OpenAI-compatible local endpoints and forwards requests to the
+Codex upstream used by the Codex CLI:
+
+- `GET /v1/models`
+- `POST /v1/responses`
+- `POST /v1/responses/compact`
+- `POST /v1/chat/completions`
+- `POST /v1/completions`
+- `GET /health`
+
+The implementation is Swift/AppKit for the tray UI and Swift/Foundation plus
+Network.framework for the local HTTP proxy. `CLIProxyAPI/` is kept only as a
+local reference and is ignored by git.
+
+## Run
+
+```bash
+swift run CodexAPI
+```
+
+Open the tray menu and choose `Login OpenAI` to run the Codex OAuth flow in
+the browser. The app receives the callback at `/auth/callback`, stores the
+access/refresh token in its local settings, and refreshes OAuth tokens before
+expiry.
+
+You can also choose `Settings` and set an upstream Codex access token manually.
+By default the proxy listens on:
+
+```text
+http://127.0.0.1:1455/v1
+```
+
+If `Token` is empty, the proxy falls back to the incoming
+`Authorization: Bearer <token>` header. If `Proxy Key` is set, requests must use
+that key locally and a separate upstream `Token` must be configured.
+
+The OAuth flow follows the Codex CLI-style PKCE flow used by `CLIProxyAPI`:
+
+- authorization endpoint: `https://auth.openai.com/oauth/authorize`
+- token endpoint: `https://auth.openai.com/oauth/token`
+- redirect: `http://localhost:1455/auth/callback` by default
+- scope: `openid email profile offline_access`
+
+## Build an app bundle
+
+```bash
+scripts/build-app.sh
+open CodexAPI.app
+```
+
+The generated app bundle is a menu-bar-only app (`LSUIElement=true`) and is not
+tracked by git.
