@@ -273,17 +273,14 @@ final class AppModel: ObservableObject {
         let localToken = settings.proxyKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
             ? "codex-api-local"
             : settings.proxyKey.trimmingCharacters(in: .whitespacesAndNewlines)
-        let mainModel = settings.defaultModelID
-        let fastModel = settings.effectiveModelIDs.contains("gpt-5.3-codex-spark")
-            ? "gpt-5.3-codex-spark"
-            : mainModel
 
         return [
             "export ANTHROPIC_BASE_URL=\(shellQuote(settings.baseURL))",
             "export ANTHROPIC_AUTH_TOKEN=\(shellQuote(localToken))",
             "export ANTHROPIC_API_KEY=\(shellQuote(localToken))",
-            "export ANTHROPIC_MODEL=\(shellQuote(mainModel))",
-            "export ANTHROPIC_SMALL_FAST_MODEL=\(shellQuote(fastModel))",
+            "export ANTHROPIC_DEFAULT_OPUS_MODEL=\(shellQuote("gpt-5.5"))",
+            "export ANTHROPIC_DEFAULT_SONNET_MODEL=\(shellQuote("gpt-5.4"))",
+            "export ANTHROPIC_DEFAULT_HAIKU_MODEL=\(shellQuote("gpt-5.4"))",
             "claude"
         ].joined(separator: "\n")
     }
