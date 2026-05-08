@@ -4,7 +4,7 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 APP="$ROOT/CodexAPI.app"
 DIST="$ROOT/dist"
-VERSION="${VERSION:-1.0.0}"
+VERSION="${VERSION:-1.0.1}"
 ARCHIVE="$DIST/CodexAPI-$VERSION-macos.zip"
 
 cd "$ROOT"

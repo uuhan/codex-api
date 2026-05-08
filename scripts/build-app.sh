@@ -4,7 +4,7 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 APP="$ROOT/CodexAPI.app"
 BINARY="$ROOT/.build/release/CodexAPI"
-VERSION="${VERSION:-1.0.0}"
+VERSION="${VERSION:-1.0.1}"
 
 cd "$ROOT"
 swift build -c release

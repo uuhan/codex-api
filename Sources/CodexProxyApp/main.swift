@@ -72,14 +72,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         menu.addItem(makeMenuItem("Settings", action: #selector(openSettings), keyEquivalent: ","))
 
         menu.addItem(NSMenuItem.separator())
-        let statusItem = NSMenuItem(title: status.isRunning ? "Running \(status.baseURL)" : "Stopped", action: nil, keyEquivalent: "")
-        statusItem.isEnabled = false
-        menu.addItem(statusItem)
-        if let latest = model.logs.last {
-            let logItem = NSMenuItem(title: "\(latest.level.rawValue): \(latest.message)", action: nil, keyEquivalent: "")
-            logItem.isEnabled = false
-            menu.addItem(logItem)
-        }
+        menu.addItem(makeRuntimeInfoMenuItem(status: status, latestLog: model.logs.last))
 
         menu.addItem(NSMenuItem.separator())
         menu.addItem(makeMenuItem("Quit", action: #selector(quit), keyEquivalent: "q"))
@@ -101,6 +94,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             )
         )
         view.frame = NSRect(x: 0, y: 0, width: 280, height: 92)
+        item.view = view
+        return item
+    }
+
+    private func makeRuntimeInfoMenuItem(status: ProxyRuntimeStatus, latestLog: ProxyLogEntry?) -> NSMenuItem {
+        let item = NSMenuItem()
+        let view = NSHostingView(
+            rootView: RuntimeInfoMenuView(
+                statusText: status.isRunning ? "Running \(status.baseURL)" : "Stopped",
+                logText: latestLog.map { "\($0.level.rawValue): \($0.message)" }
+            )
+        )
+        view.frame = NSRect(x: 0, y: 0, width: 280, height: latestLog == nil ? 40 : 62)
         item.view = view
         return item
     }
@@ -481,6 +487,32 @@ private struct RateLimitMenuRowView: View {
             return .orange
         }
         return .accentColor
+    }
+}
+
+struct RuntimeInfoMenuView: View {
+    var statusText: String
+    var logText: String?
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text(statusText)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .lineLimit(1)
+                .truncationMode(.middle)
+
+            if let logText {
+                Text(logText)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+                    .truncationMode(.tail)
+            }
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 8)
+        .frame(width: 280, alignment: .leading)
     }
 }
 
