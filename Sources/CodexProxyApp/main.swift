@@ -434,17 +434,6 @@ final class AppModel: ObservableObject {
         }
     }
 
-    func rateLimitDisplay(_ window: CodexRateLimitWindow?) -> String {
-        guard let window else {
-            return rateLimitsError ?? "Unavailable"
-        }
-        var parts = [String(format: "%.0f%% left", window.remainingPercent)]
-        if let resetsAt = window.resetsAt {
-            parts.append("resets \(shortTimeFormatter.string(from: resetsAt))")
-        }
-        return parts.joined(separator: ", ")
-    }
-
     func rateLimitUpdatedDisplay() -> String {
         guard let rateLimitsUpdatedAt else {
             return rateLimitsError ?? "Not loaded"
@@ -460,11 +449,14 @@ final class AppModel: ObservableObject {
     }
 
     func rateLimitMenuRows() -> [RateLimitMenuRowState] {
-        let snapshot = rateLimits?.codexSnapshot
-        return [
-            rateLimitMenuRow(title: "5h", window: snapshot?.primary),
-            rateLimitMenuRow(title: "1 week", window: snapshot?.secondary)
-        ]
+        guard let snapshot = rateLimits?.codexSnapshot else {
+            return [rateLimitMenuRow(title: "Limits", window: nil)]
+        }
+        let windows = [snapshot.primary, snapshot.secondary].compactMap { $0 }
+        guard !windows.isEmpty else {
+            return [rateLimitMenuRow(title: "Limits", window: nil)]
+        }
+        return windows.map { rateLimitMenuRow(title: $0.displayName, window: $0) }
     }
 
     private func rateLimitMenuRow(title: String, window: CodexRateLimitWindow?) -> RateLimitMenuRowState {
@@ -690,15 +682,18 @@ struct SettingsView: View {
                 GroupBox("Limits") {
                     VStack(alignment: .leading, spacing: 10) {
                         Grid(alignment: .leading, horizontalSpacing: 12, verticalSpacing: 8) {
-                            GridRow {
-                                Text("5h")
-                                Text(model.rateLimitDisplay(model.rateLimits?.codexSnapshot?.primary))
+                            ForEach(model.rateLimitMenuRows()) { row in
+                                GridRow {
+                                    Text(row.title)
+                                    HStack(spacing: 6) {
+                                        Text(row.detail)
+                                        if let resetText = row.resetText {
+                                            Text(resetText)
+                                                .foregroundStyle(.secondary)
+                                        }
+                                    }
                                     .foregroundStyle(.secondary)
-                            }
-                            GridRow {
-                                Text("1 week")
-                                Text(model.rateLimitDisplay(model.rateLimits?.codexSnapshot?.secondary))
-                                    .foregroundStyle(.secondary)
+                                }
                             }
                         }
 

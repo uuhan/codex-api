@@ -2,6 +2,17 @@ import XCTest
 @testable import CodexProxyCore
 
 final class CodexRateLimitServiceTests: XCTestCase {
+    func testWindowDisplayNameUsesTheUpstreamWindowDuration() {
+        func window(_ minutes: Int?) -> CodexRateLimitWindow {
+            CodexRateLimitWindow(usedPercent: 0, windowDurationMinutes: minutes, resetAfterSeconds: nil, resetsAt: nil)
+        }
+
+        XCTAssertEqual(window(300).displayName, "5h")
+        XCTAssertEqual(window(10_080).displayName, "1 week")
+        XCTAssertEqual(window(20_160).displayName, "2 weeks")
+        XCTAssertEqual(window(nil).displayName, "Limit")
+    }
+
     func testRateLimitURLUsesChatGPTUsageEndpointForBackendAPIBase() {
         XCTAssertEqual(
             CodexRateLimitService.rateLimitsURL(for: "https://chatgpt.com/backend-api/codex"),

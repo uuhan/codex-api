@@ -62,6 +62,24 @@ public struct CodexRateLimitWindow: Equatable, Sendable {
     public var remainingPercent: Double {
         (100 - usedPercent).clamped(to: 0...100)
     }
+
+    public var displayName: String {
+        guard let minutes = windowDurationMinutes, minutes > 0 else {
+            return "Limit"
+        }
+        if minutes % (7 * 24 * 60) == 0 {
+            let weeks = minutes / (7 * 24 * 60)
+            return weeks == 1 ? "1 week" : "\(weeks) weeks"
+        }
+        if minutes % (24 * 60) == 0 {
+            let days = minutes / (24 * 60)
+            return days == 1 ? "1 day" : "\(days) days"
+        }
+        if minutes % 60 == 0 {
+            return "\(minutes / 60)h"
+        }
+        return "\(minutes)m"
+    }
 }
 
 public final class CodexRateLimitService: @unchecked Sendable {
