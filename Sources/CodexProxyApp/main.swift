@@ -235,6 +235,12 @@ final class AppModel: ObservableObject {
         formatter.timeStyle = .short
         return formatter
     }()
+    private let resetDateTimeFormatter: DateFormatter = {
+        let formatter = DateFormatter()
+        formatter.dateStyle = .medium
+        formatter.timeStyle = .short
+        return formatter
+    }()
 
     init(store: SettingsStore, server: CodexProxyServer, logger: ProxyLogger, oauthService: CodexOAuthService, rateLimitService: CodexRateLimitService, modelsService: CodexModelsService) {
         self.store = store
@@ -473,7 +479,10 @@ final class AppModel: ObservableObject {
             title: title,
             remainingPercent: window.remainingPercent,
             detail: String(format: "%.0f%% left", window.remainingPercent),
-            resetText: window.resetsAt.map { "resets \(shortTimeFormatter.string(from: $0))" }
+            resetText: window.resetsAt.map {
+                let formatter = window.resetDisplayNeedsDate ? resetDateTimeFormatter : shortTimeFormatter
+                return "resets \(formatter.string(from: $0))"
+            }
         )
     }
 

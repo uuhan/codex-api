@@ -80,6 +80,13 @@ public struct CodexRateLimitWindow: Equatable, Sendable {
         }
         return "\(minutes)m"
     }
+
+    public var resetDisplayNeedsDate: Bool {
+        guard let minutes = windowDurationMinutes else {
+            return false
+        }
+        return minutes >= 24 * 60
+    }
 }
 
 public final class CodexRateLimitService: @unchecked Sendable {

@@ -11,6 +11,11 @@ final class CodexRateLimitServiceTests: XCTestCase {
         XCTAssertEqual(window(10_080).displayName, "1 week")
         XCTAssertEqual(window(20_160).displayName, "2 weeks")
         XCTAssertEqual(window(nil).displayName, "Limit")
+
+        XCTAssertFalse(window(300).resetDisplayNeedsDate)
+        XCTAssertTrue(window(1_440).resetDisplayNeedsDate)
+        XCTAssertTrue(window(10_080).resetDisplayNeedsDate)
+        XCTAssertFalse(window(nil).resetDisplayNeedsDate)
     }
 
     func testRateLimitURLUsesChatGPTUsageEndpointForBackendAPIBase() {
