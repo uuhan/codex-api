@@ -50,7 +50,32 @@ final class UpstreamClient: @unchecked Sendable {
         return UpstreamStream(statusCode: http.statusCode, headers: responseHeaders(http), bytes: bytes)
     }
 
-    private func makeRequest(settings: ProxySettings, request: HTTPRequest, path: String, body: JSONObject, stream: Bool) throws -> URLRequest {
+    func models(settings: ProxySettings, request: HTTPRequest) async throws -> [CodexModelDescriptor] {
+        let upstreamRequest = try makeModelsRequest(settings: settings, request: request)
+        let data: Data
+        let response: URLResponse
+        do {
+            (data, response) = try await session.data(for: upstreamRequest)
+        } catch {
+            throw ProxyError.network(Self.transportErrorMessage(error, url: upstreamRequest.url))
+        }
+        guard let http = response as? HTTPURLResponse else {
+            throw ProxyError.network("upstream did not return HTTP response")
+        }
+        guard (200..<300).contains(http.statusCode) else {
+            throw ProxyError.upstreamStatus(http.statusCode, data)
+        }
+        return try CodexModelCatalog.models(fromUpstream: JSONHelper.object(from: data))
+    }
+
+    func makeModelsRequest(settings: ProxySettings, request: HTTPRequest) throws -> URLRequest {
+        if let token = upstreamToken(settings: settings, request: request), !token.isEmpty {
+            return try CodexModelsService.makeRequest(settings: settings, token: token)
+        }
+        throw ProxyError.missingUpstreamToken
+    }
+
+    func makeRequest(settings: ProxySettings, request: HTTPRequest, path: String, body: JSONObject, stream: Bool) throws -> URLRequest {
         guard let url = URL(string: settings.normalizedUpstreamBaseURL + path) else {
             throw ProxyError.badRequest("invalid upstream URL")
         }
@@ -67,8 +92,9 @@ final class UpstreamClient: @unchecked Sendable {
             throw ProxyError.missingUpstreamToken
         }
 
-        let userAgent = request.header("user-agent") ?? settings.defaultUserAgent
-        upstream.setValue(userAgent, forHTTPHeaderField: "User-Agent")
+        // This is a Codex subscription proxy, so its upstream fingerprint must
+        // remain a current Codex CLI even when the local client is Claude Code.
+        upstream.setValue(settings.upstreamUserAgent, forHTTPHeaderField: "User-Agent")
 
         if let beta = request.header("x-codex-beta-features"), !beta.isEmpty {
             upstream.setValue(beta, forHTTPHeaderField: "X-Codex-Beta-Features")
@@ -80,11 +106,7 @@ final class UpstreamClient: @unchecked Sendable {
         let sessionID = request.header("session_id") ?? request.header("x-session-id") ?? UUID().uuidString
         upstream.setValue(sessionID, forHTTPHeaderField: "Session_id")
 
-        if let originator = request.header("originator"), !originator.isEmpty {
-            upstream.setValue(originator, forHTTPHeaderField: "Originator")
-        } else if !settings.originator.isEmpty {
-            upstream.setValue(settings.originator, forHTTPHeaderField: "Originator")
-        }
+        upstream.setValue(settings.upstreamOriginator, forHTTPHeaderField: "Originator")
 
         if !settings.accountID.isEmpty {
             upstream.setValue(settings.accountID, forHTTPHeaderField: "Chatgpt-Account-Id")

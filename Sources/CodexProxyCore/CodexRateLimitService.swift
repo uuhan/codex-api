@@ -85,7 +85,7 @@ public final class CodexRateLimitService: @unchecked Sendable {
         request.timeoutInterval = 30
         request.setValue("application/json", forHTTPHeaderField: "Accept")
         request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
-        request.setValue(settings.defaultUserAgent.isEmpty ? "codex-cli" : settings.defaultUserAgent, forHTTPHeaderField: "User-Agent")
+        request.setValue(settings.upstreamUserAgent, forHTTPHeaderField: "User-Agent")
         if !settings.accountID.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
             request.setValue(settings.accountID, forHTTPHeaderField: "ChatGPT-Account-Id")
         }

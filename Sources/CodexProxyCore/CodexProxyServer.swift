@@ -155,7 +155,8 @@ public final class CodexProxyServer: @unchecked Sendable {
                 "upstream": currentSettings.normalizedUpstreamBaseURL
             ])
         case ("GET", "/v1/models"):
-            return try jsonResponse(isAnthropicRequest(request) ? anthropicModelsPayload(settings: currentSettings) : modelsPayload(settings: currentSettings))
+            let models = try await upstream.models(settings: currentSettings, request: request)
+            return try jsonResponse(isAnthropicRequest(request) ? anthropicModelsPayload(models: models) : modelsPayload(models: models))
         case ("POST", "/v1/responses"):
             return try await handleResponses(request, settings: currentSettings, connection: connection, compact: false)
         case ("POST", "/v1/responses/compact"):
@@ -458,15 +459,15 @@ public final class CodexProxyServer: @unchecked Sendable {
         return completed
     }
 
-    private func modelsPayload(settings: ProxySettings) -> JSONObject {
+    private func modelsPayload(models: [CodexModelDescriptor]) -> JSONObject {
         [
             "object": "list",
-            "data": settings.effectiveModelDescriptors.map(\.openAIModelObject)
+            "data": models.map(\.openAIModelObject)
         ]
     }
 
-    private func anthropicModelsPayload(settings: ProxySettings) -> JSONObject {
-        let models = settings.effectiveModelDescriptors
+    private func anthropicModelsPayload(models: [CodexModelDescriptor]) -> JSONObject {
+        let models = models
             .filter { !$0.supportedParameters.isEmpty }
             .map(\.anthropicModelObject)
         return [

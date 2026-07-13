@@ -1,6 +1,14 @@
 import Foundation
 
 public struct ProxySettings: Codable, Equatable, Sendable {
+    /// Codex version required for the GPT-5.6 model family to appear upstream.
+    public static let defaultCodexClientVersion = "0.144.1"
+    public static let codexUserAgent = codexUserAgent(for: defaultCodexClientVersion)
+    public static let codexOriginator = "codex-tui"
+
+    private static let legacyCodexUserAgent = "codex_cli_rs/0.118.0 (Mac OS 26.3.1; arm64) iTerm.app/3.6.9"
+    private static let legacyCodexOriginator = "codex_cli_rs"
+
     public var listenHost: String
     public var listenPort: UInt16
     public var upstreamBaseURL: String
@@ -12,6 +20,7 @@ public struct ProxySettings: Codable, Equatable, Sendable {
     public var tokenExpiresAt: Date?
     public var lastRefreshAt: Date?
     public var proxyKey: String
+    public var codexClientVersion: String
     public var defaultUserAgent: String
     public var originator: String
     public var modelIDs: [String]
@@ -29,6 +38,7 @@ public struct ProxySettings: Codable, Equatable, Sendable {
         case tokenExpiresAt
         case lastRefreshAt
         case proxyKey
+        case codexClientVersion
         case defaultUserAgent
         case originator
         case modelIDs
@@ -47,8 +57,9 @@ public struct ProxySettings: Codable, Equatable, Sendable {
         tokenExpiresAt: Date? = nil,
         lastRefreshAt: Date? = nil,
         proxyKey: String = "",
-        defaultUserAgent: String = "codex_cli_rs/0.118.0 (Mac OS 26.3.1; arm64) iTerm.app/3.6.9",
-        originator: String = "codex_cli_rs",
+        codexClientVersion: String = ProxySettings.defaultCodexClientVersion,
+        defaultUserAgent: String = ProxySettings.codexUserAgent,
+        originator: String = ProxySettings.codexOriginator,
         modelIDs: [String] = CodexModelCatalog.defaultModelIDs,
         injectImageGenerationTool: Bool = true
     ) {
@@ -63,6 +74,7 @@ public struct ProxySettings: Codable, Equatable, Sendable {
         self.tokenExpiresAt = tokenExpiresAt
         self.lastRefreshAt = lastRefreshAt
         self.proxyKey = proxyKey
+        self.codexClientVersion = Self.normalizedClientVersion(codexClientVersion)
         self.defaultUserAgent = defaultUserAgent
         self.originator = originator
         self.modelIDs = modelIDs
@@ -83,8 +95,9 @@ public struct ProxySettings: Codable, Equatable, Sendable {
             tokenExpiresAt: try container.decodeIfPresent(Date.self, forKey: .tokenExpiresAt),
             lastRefreshAt: try container.decodeIfPresent(Date.self, forKey: .lastRefreshAt),
             proxyKey: try container.decodeIfPresent(String.self, forKey: .proxyKey) ?? "",
-            defaultUserAgent: try container.decodeIfPresent(String.self, forKey: .defaultUserAgent) ?? "codex_cli_rs/0.118.0 (Mac OS 26.3.1; arm64) iTerm.app/3.6.9",
-            originator: try container.decodeIfPresent(String.self, forKey: .originator) ?? "codex_cli_rs",
+            codexClientVersion: Self.normalizedClientVersion(try container.decodeIfPresent(String.self, forKey: .codexClientVersion)),
+            defaultUserAgent: Self.updatedUserAgent(try container.decodeIfPresent(String.self, forKey: .defaultUserAgent)),
+            originator: Self.updatedOriginator(try container.decodeIfPresent(String.self, forKey: .originator)),
             modelIDs: try container.decodeIfPresent([String].self, forKey: .modelIDs) ?? CodexModelCatalog.defaultModelIDs,
             injectImageGenerationTool: try container.decodeIfPresent(Bool.self, forKey: .injectImageGenerationTool) ?? true
         )
@@ -124,6 +137,23 @@ public struct ProxySettings: Codable, Equatable, Sendable {
 
     public var normalizedUpstreamBaseURL: String {
         upstreamBaseURL.trimmingCharacters(in: CharacterSet(charactersIn: "/"))
+    }
+
+    public var upstreamClientVersion: String {
+        Self.normalizedClientVersion(codexClientVersion)
+    }
+
+    public var upstreamUserAgent: String {
+        let userAgent = defaultUserAgent.trimmingCharacters(in: .whitespacesAndNewlines)
+        if userAgent.isEmpty || userAgent == Self.codexUserAgent {
+            return Self.codexUserAgent(for: upstreamClientVersion)
+        }
+        return userAgent
+    }
+
+    public var upstreamOriginator: String {
+        let value = originator.trimmingCharacters(in: .whitespacesAndNewlines)
+        return value.isEmpty ? Self.codexOriginator : value
     }
 
     public var hasOAuthSession: Bool {
@@ -175,6 +205,33 @@ public struct ProxySettings: Codable, Equatable, Sendable {
             string += String(repeating: "=", count: 4 - remainder)
         }
         return Data(base64Encoded: string)
+    }
+
+    private static func updatedUserAgent(_ value: String?) -> String {
+        switch value?.trimmingCharacters(in: .whitespacesAndNewlines) {
+        case nil, "", legacyCodexUserAgent:
+            return codexUserAgent
+        case let value?:
+            return value
+        }
+    }
+
+    private static func updatedOriginator(_ value: String?) -> String {
+        switch value?.trimmingCharacters(in: .whitespacesAndNewlines) {
+        case nil, "", legacyCodexOriginator:
+            return codexOriginator
+        case let value?:
+            return value
+        }
+    }
+
+    public static func codexUserAgent(for clientVersion: String) -> String {
+        "codex-tui/\(clientVersion) (Mac OS 26.5.0; arm64) iTerm.app/3.6.10 (codex-tui; \(clientVersion))"
+    }
+
+    private static func normalizedClientVersion(_ value: String?) -> String {
+        let version = value?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        return version.isEmpty ? defaultCodexClientVersion : version
     }
 }
 

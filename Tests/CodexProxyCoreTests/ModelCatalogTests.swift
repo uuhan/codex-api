@@ -5,7 +5,10 @@ final class ModelCatalogTests: XCTestCase {
     func testDefaultModelsUseCurrentCodexCatalog() {
         let settings = ProxySettings()
 
-        XCTAssertEqual(settings.defaultModelID, "gpt-5.3-codex")
+        XCTAssertEqual(settings.defaultModelID, "gpt-5.6-terra")
+        XCTAssertTrue(settings.effectiveModelIDs.contains("gpt-5.6-sol"))
+        XCTAssertTrue(settings.effectiveModelIDs.contains("gpt-5.6-terra"))
+        XCTAssertTrue(settings.effectiveModelIDs.contains("gpt-5.6-luna"))
         XCTAssertTrue(settings.effectiveModelIDs.contains("gpt-5.3-codex"))
         XCTAssertTrue(settings.effectiveModelIDs.contains("gpt-5.4"))
         XCTAssertTrue(settings.effectiveModelIDs.contains("gpt-5.5"))
@@ -35,6 +38,55 @@ final class ModelCatalogTests: XCTestCase {
 
         XCTAssertFalse(settings.usesAutomaticModelCatalog)
         XCTAssertEqual(settings.effectiveModelIDs, ["custom-model"])
+    }
+
+    func testUpstreamModelsOnlyExposeAvailableAPIModels() throws {
+        let payload: JSONObject = [
+            "models": [
+                [
+                    "slug": "gpt-5.6-terra",
+                    "display_name": "GPT-5.6-Terra",
+                    "description": "Balanced agentic coding model for everyday work.",
+                    "context_window": 272_000,
+                    "supported_in_api": true,
+                    "visibility": "list"
+                ],
+                [
+                    "slug": "internal-model",
+                    "supported_in_api": true,
+                    "visibility": "hide"
+                ],
+                [
+                    "slug": "unsupported-model",
+                    "supported_in_api": false,
+                    "visibility": "list"
+                ]
+            ]
+        ]
+
+        let models = try CodexModelCatalog.models(fromUpstream: payload)
+
+        XCTAssertEqual(models.map(\.id), ["gpt-5.6-terra"])
+        XCTAssertEqual(models.first?.displayName, "GPT-5.6-Terra")
+        XCTAssertEqual(models.first?.contextLength, 272_000)
+    }
+
+    func testLegacyCodexFingerprintIsMigrated() throws {
+        let payload = Data(#"{"defaultUserAgent":"codex_cli_rs/0.118.0 (Mac OS 26.3.1; arm64) iTerm.app/3.6.9","originator":"codex_cli_rs"}"#.utf8)
+
+        let settings = try JSONDecoder().decode(ProxySettings.self, from: payload)
+
+        XCTAssertEqual(settings.upstreamUserAgent, ProxySettings.codexUserAgent)
+        XCTAssertEqual(settings.upstreamOriginator, ProxySettings.codexOriginator)
+    }
+
+    func testMissingConfiguredClientVersionUsesTheCurrentDefault() throws {
+        let payload = Data(#"{"defaultUserAgent":"codex-tui/0.144.1 (Mac OS 26.5.0; arm64) iTerm.app/3.6.10 (codex-tui; 0.144.1)"}"#.utf8)
+
+        let settings = try JSONDecoder().decode(ProxySettings.self, from: payload)
+
+        XCTAssertEqual(settings.upstreamClientVersion, ProxySettings.defaultCodexClientVersion)
+        XCTAssertEqual(settings.upstreamUserAgent, ProxySettings.codexUserAgent)
     }
 
     func testAnthropicModelObjectUsesAnthropicShape() {

@@ -8,8 +8,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private let logger = ProxyLogger()
     private let oauthService = CodexOAuthService()
     private let rateLimitService = CodexRateLimitService()
+    private let modelsService = CodexModelsService()
     private lazy var server = CodexProxyServer(logger: logger, oauthService: oauthService)
-    private lazy var model = AppModel(store: store, server: server, logger: logger, oauthService: oauthService, rateLimitService: rateLimitService)
+    private lazy var model = AppModel(store: store, server: server, logger: logger, oauthService: oauthService, rateLimitService: rateLimitService, modelsService: modelsService)
     private var statusItem: NSStatusItem?
     private var settingsWindow: NSWindow?
 
@@ -180,6 +181,10 @@ final class AppModel: ObservableObject {
     @Published var rateLimitsUpdatedAt: Date?
     @Published var rateLimitsError: String?
     @Published var isRefreshingRateLimits = false
+    @Published var availableModels: [CodexModelDescriptor] = []
+    @Published var modelsUpdatedAt: Date?
+    @Published var modelsError: String?
+    @Published var isRefreshingModels = false
 
     var onChange: (() -> Void)?
 
@@ -188,6 +193,7 @@ final class AppModel: ObservableObject {
     private let logger: ProxyLogger
     private let oauthService: CodexOAuthService
     private let rateLimitService: CodexRateLimitService
+    private let modelsService: CodexModelsService
     private let shortTimeFormatter: DateFormatter = {
         let formatter = DateFormatter()
         formatter.dateStyle = .none
@@ -195,12 +201,13 @@ final class AppModel: ObservableObject {
         return formatter
     }()
 
-    init(store: SettingsStore, server: CodexProxyServer, logger: ProxyLogger, oauthService: CodexOAuthService, rateLimitService: CodexRateLimitService) {
+    init(store: SettingsStore, server: CodexProxyServer, logger: ProxyLogger, oauthService: CodexOAuthService, rateLimitService: CodexRateLimitService, modelsService: CodexModelsService) {
         self.store = store
         self.server = server
         self.logger = logger
         self.oauthService = oauthService
         self.rateLimitService = rateLimitService
+        self.modelsService = modelsService
         self.settings = store.load()
         self.status = server.currentStatus()
         self.logs = logger.snapshot()
@@ -246,6 +253,13 @@ final class AppModel: ObservableObject {
         restart()
     }
 
+    func saveAndRefreshModels() {
+        store.save(settings)
+        server.update(settings: settings)
+        onChange?()
+        refreshModels()
+    }
+
     func loginOpenAI() {
         if !status.isRunning {
             start()
@@ -272,6 +286,12 @@ final class AppModel: ObservableObject {
     func refreshRateLimits() {
         Task {
             await loadRateLimits()
+        }
+    }
+
+    func refreshModels() {
+        Task {
+            await loadModels()
         }
     }
 
@@ -350,6 +370,32 @@ final class AppModel: ObservableObject {
         }
     }
 
+    private func loadModels() async {
+        guard !isRefreshingModels else {
+            return
+        }
+        isRefreshingModels = true
+        onChange?()
+        defer {
+            isRefreshingModels = false
+            onChange?()
+        }
+
+        do {
+            availableModels = try await modelsService.fetch(settings: settings)
+            modelsUpdatedAt = Date()
+            modelsError = nil
+            logger.append(.info, "fetched \(availableModels.count) live Codex models")
+        } catch ProxyError.missingUpstreamToken {
+            availableModels = []
+            modelsUpdatedAt = nil
+            modelsError = "Login required"
+        } catch {
+            modelsError = "\(error)"
+            logger.append(.warning, "model refresh failed: \(error)")
+        }
+    }
+
     func rateLimitDisplay(_ window: CodexRateLimitWindow?) -> String {
         guard let window else {
             return rateLimitsError ?? "Unavailable"
@@ -366,6 +412,13 @@ final class AppModel: ObservableObject {
             return rateLimitsError ?? "Not loaded"
         }
         return "Updated \(shortTimeFormatter.string(from: rateLimitsUpdatedAt))"
+    }
+
+    func modelsUpdatedDisplay() -> String {
+        guard let modelsUpdatedAt else {
+            return modelsError ?? "Not loaded"
+        }
+        return "\(availableModels.count) models fetched \(shortTimeFormatter.string(from: modelsUpdatedAt))"
     }
 
     func rateLimitMenuRows() -> [RateLimitMenuRowState] {
@@ -403,9 +456,9 @@ final class AppModel: ObservableObject {
             "export ANTHROPIC_BASE_URL=\(shellQuote(settings.baseURL))",
             "export ANTHROPIC_AUTH_TOKEN=\(shellQuote(localToken))",
             "export ANTHROPIC_API_KEY=\(shellQuote(localToken))",
-            "export ANTHROPIC_DEFAULT_OPUS_MODEL=\(shellQuote("gpt-5.5"))",
-            "export ANTHROPIC_DEFAULT_SONNET_MODEL=\(shellQuote("gpt-5.4"))",
-            "export ANTHROPIC_DEFAULT_HAIKU_MODEL=\(shellQuote("gpt-5.4"))",
+            "export ANTHROPIC_DEFAULT_OPUS_MODEL=\(shellQuote("gpt-5.6-sol"))",
+            "export ANTHROPIC_DEFAULT_SONNET_MODEL=\(shellQuote("gpt-5.6-terra"))",
+            "export ANTHROPIC_DEFAULT_HAIKU_MODEL=\(shellQuote("gpt-5.6-luna"))",
             "claude"
         ].joined(separator: "\n")
     }
@@ -553,6 +606,10 @@ struct SettingsView: View {
                         TextField("https://chatgpt.com/backend-api/codex", text: $model.settings.upstreamBaseURL)
                     }
                     GridRow {
+                        Text("Codex Client Version")
+                        TextField(ProxySettings.defaultCodexClientVersion, text: $model.settings.codexClientVersion)
+                    }
+                    GridRow {
                         Text("Token")
                         SecureField("Bearer token", text: $model.settings.authToken)
                     }
@@ -570,7 +627,7 @@ struct SettingsView: View {
                         SecureField("optional", text: $model.settings.proxyKey)
                     }
                     GridRow {
-                        Text("Models")
+                        Text("Fallback Models")
                         TextField("comma separated", text: $modelsText)
                             .onChange(of: modelsText) { value in
                                 model.settings.modelIDs = value
@@ -579,6 +636,28 @@ struct SettingsView: View {
                                     .filter { !$0.isEmpty }
                             }
                     }
+                }
+
+                GroupBox("Live Models") {
+                    VStack(alignment: .leading, spacing: 8) {
+                        HStack {
+                            Text(model.modelsUpdatedDisplay())
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                            Spacer()
+                            Button(model.isRefreshingModels ? "Refreshing..." : "Save & Refresh Models") {
+                                model.saveAndRefreshModels()
+                            }
+                            .disabled(model.isRefreshingModels)
+                        }
+
+                        if !model.availableModels.isEmpty {
+                            Text(model.availableModels.map(\.id).joined(separator: ", "))
+                                .font(.caption)
+                                .textSelection(.enabled)
+                        }
+                    }
+                    .frame(maxWidth: .infinity, alignment: .leading)
                 }
 
                 GroupBox("Limits") {

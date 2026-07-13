@@ -146,6 +146,33 @@ public enum CodexModelCatalog {
         maxCompletionTokens: 128_000
     )
 
+    private static let gpt56Sol = CodexModelDescriptor(
+        id: "gpt-5.6-sol",
+        created: 1_783_900_800,
+        displayName: "GPT-5.6-Sol",
+        version: "gpt-5.6",
+        description: "Latest frontier agentic coding model.",
+        contextLength: 272_000
+    )
+
+    private static let gpt56Terra = CodexModelDescriptor(
+        id: "gpt-5.6-terra",
+        created: 1_783_900_800,
+        displayName: "GPT-5.6-Terra",
+        version: "gpt-5.6",
+        description: "Balanced agentic coding model for everyday work.",
+        contextLength: 272_000
+    )
+
+    private static let gpt56Luna = CodexModelDescriptor(
+        id: "gpt-5.6-luna",
+        created: 1_783_900_800,
+        displayName: "GPT-5.6-Luna",
+        version: "gpt-5.6",
+        description: "Fast and affordable agentic coding model.",
+        contextLength: 272_000
+    )
+
     private static let autoReview = CodexModelDescriptor(
         id: "codex-auto-review",
         created: 1_776_902_400,
@@ -166,7 +193,7 @@ public enum CodexModelCatalog {
 
     public static let freeModels = [gpt52, gpt53Codex, gpt54, gpt54Mini, autoReview, image2]
     public static let teamModels = [gpt52, gpt53Codex, gpt54, gpt54Mini, gpt55, autoReview, image2]
-    public static let plusModels = [gpt52, gpt53Codex, gpt53CodexSpark, gpt54, gpt54Mini, gpt55, autoReview, image2]
+    public static let plusModels = [gpt56Sol, gpt56Terra, gpt56Luna, gpt52, gpt53Codex, gpt53CodexSpark, gpt54, gpt54Mini, gpt55, autoReview, image2]
     public static let proModels = plusModels
 
     public static var defaultModels: [CodexModelDescriptor] {
@@ -178,7 +205,7 @@ public enum CodexModelCatalog {
     }
 
     public static var defaultModelID: String {
-        "gpt-5.3-codex"
+        "gpt-5.6-terra"
     }
 
     public static func models(forPlanType planType: String?) -> [CodexModelDescriptor] {
@@ -212,6 +239,31 @@ public enum CodexModelCatalog {
 
     public static func effectiveModelIDs(modelIDs: [String], planType: String?) -> [String] {
         models(modelIDs: modelIDs, planType: planType).map(\.id)
+    }
+
+    public static func models(fromUpstream payload: JSONObject) throws -> [CodexModelDescriptor] {
+        guard let upstreamModels = JSONHelper.array(payload["models"]) else {
+            throw ProxyError.invalidJSON("models response does not contain a models array")
+        }
+
+        return upstreamModels.compactMap { value in
+            guard let model = JSONHelper.object(value),
+                  JSONHelper.bool(model["supported_in_api"]),
+                  JSONHelper.string(model["visibility"]) != "hide",
+                  let id = JSONHelper.string(model["slug"])?.trimmingCharacters(in: .whitespacesAndNewlines),
+                  !id.isEmpty else {
+                return nil
+            }
+            return CodexModelDescriptor(
+                id: id,
+                created: intValue(model["created"]) ?? 0,
+                displayName: JSONHelper.string(model["display_name"]) ?? id,
+                version: JSONHelper.string(model["version"]) ?? id,
+                description: JSONHelper.string(model["description"]) ?? "",
+                contextLength: intValue(model["context_window"]) ?? intValue(model["context_length"]),
+                maxCompletionTokens: intValue(model["max_completion_tokens"])
+            )
+        }
     }
 
     public static func isAutomaticModelList(_ modelIDs: [String]) -> Bool {
@@ -254,5 +306,20 @@ public enum CodexModelCatalog {
 
     private static func sameModelIDs(_ lhs: [String], _ rhs: [String]) -> Bool {
         lhs.map { $0.lowercased() } == rhs.map { $0.lowercased() }
+    }
+
+    private static func intValue(_ value: Any?) -> Int? {
+        switch value {
+        case let value as Int:
+            return value
+        case let value as Double:
+            return Int(value)
+        case let value as NSNumber:
+            return value.intValue
+        case let value as String:
+            return Int(value)
+        default:
+            return nil
+        }
     }
 }
