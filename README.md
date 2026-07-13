@@ -66,11 +66,12 @@ upstream on every request. Set `Codex Client Version` in the Settings window,
 then choose `Save & Refresh Models` to apply that version immediately and view
 the account's current model list. Anthropic clients are detected from Anthropic headers or Claude
 Code user agents and receive the Anthropic models shape; other clients receive
-the OpenAI models shape. The local catalog is retained only as a fallback for
-requests that omit a model.
+the OpenAI models shape. Requests to inference endpoints must specify a model;
+the proxy does not substitute a stale local fallback.
 
-The tray menu also includes `Copy Claude Code Config`, which copies shell
-environment variables for launching Claude Code against the root local proxy URL.
+The tray menu includes a `Live Models` submenu with the latest fetched model IDs,
+and `Copy Claude Code Config`, which copies shell environment variables for
+launching Claude Code against the root local proxy URL.
 Claude Code uses the Anthropic Messages API; the proxy translates `/v1/messages`
 into the Codex upstream `/responses` protocol and translates Codex responses
 back to Anthropic message events.

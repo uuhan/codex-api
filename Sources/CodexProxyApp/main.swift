@@ -20,6 +20,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         model.start()
         model.refreshOAuthIfNeeded()
         model.refreshRateLimits()
+        model.refreshModels()
         rebuildMenu()
 
         model.onChange = { [weak self] in
@@ -59,6 +60,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let refreshLimitsItem = makeMenuItem(model.isRefreshingRateLimits ? "Refreshing Limits..." : "Refresh Limits", action: #selector(refreshRateLimits))
         refreshLimitsItem.isEnabled = !model.isRefreshingRateLimits
         menu.addItem(refreshLimitsItem)
+        menu.addItem(makeModelsMenuItem())
 
         menu.addItem(NSMenuItem.separator())
         if status.isRunning {
@@ -96,6 +98,35 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         )
         view.frame = NSRect(x: 0, y: 0, width: 280, height: 92)
         item.view = view
+        return item
+    }
+
+    private func makeModelsMenuItem() -> NSMenuItem {
+        let item = NSMenuItem(title: "Live Models", action: nil, keyEquivalent: "")
+        let submenu = NSMenu()
+
+        if model.isRefreshingModels {
+            let loading = NSMenuItem(title: "Refreshing...", action: nil, keyEquivalent: "")
+            loading.isEnabled = false
+            submenu.addItem(loading)
+        } else if model.availableModels.isEmpty {
+            let empty = NSMenuItem(title: model.modelsError ?? "No models loaded", action: nil, keyEquivalent: "")
+            empty.isEnabled = false
+            submenu.addItem(empty)
+        } else {
+            for modelDescriptor in model.availableModels {
+                let modelItem = NSMenuItem(title: modelDescriptor.id, action: nil, keyEquivalent: "")
+                modelItem.toolTip = modelDescriptor.displayName
+                modelItem.isEnabled = false
+                submenu.addItem(modelItem)
+            }
+        }
+
+        submenu.addItem(NSMenuItem.separator())
+        let refresh = NSMenuItem(title: "Refresh Models", action: #selector(refreshModels), keyEquivalent: "")
+        refresh.target = self
+        submenu.addItem(refresh)
+        item.submenu = submenu
         return item
     }
 
@@ -143,6 +174,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     @objc private func refreshRateLimits() {
         model.refreshRateLimits()
+    }
+
+    @objc private func refreshModels() {
+        model.refreshModels()
     }
 
     @objc private func openSettings() {
@@ -319,6 +354,7 @@ final class AppModel: ObservableObject {
         let label = tokens.email.isEmpty ? tokens.accountID : tokens.email
         logger.append(.info, "OpenAI OAuth token saved\(label.isEmpty ? "" : " for \(label)")")
         refreshRateLimits()
+        refreshModels()
     }
 
     private func refreshOAuth(force: Bool) async {
@@ -380,6 +416,8 @@ final class AppModel: ObservableObject {
             isRefreshingModels = false
             onChange?()
         }
+
+        await refreshOAuth(force: false)
 
         do {
             availableModels = try await modelsService.fetch(settings: settings)
@@ -572,7 +610,6 @@ struct RuntimeInfoMenuView: View {
 struct SettingsView: View {
     @ObservedObject var model: AppModel
     @State private var portText: String = ""
-    @State private var modelsText: String = ""
 
     var body: some View {
         ScrollView {
@@ -625,16 +662,6 @@ struct SettingsView: View {
                     GridRow {
                         Text("Proxy Key")
                         SecureField("optional", text: $model.settings.proxyKey)
-                    }
-                    GridRow {
-                        Text("Fallback Models")
-                        TextField("comma separated", text: $modelsText)
-                            .onChange(of: modelsText) { value in
-                                model.settings.modelIDs = value
-                                    .split(separator: ",")
-                                    .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
-                                    .filter { !$0.isEmpty }
-                            }
                     }
                 }
 
@@ -730,7 +757,6 @@ struct SettingsView: View {
         .padding(18)
         .onAppear {
             portText = "\(model.settings.listenPort)"
-            modelsText = model.settings.effectiveModelIDs.joined(separator: ", ")
         }
     }
 }

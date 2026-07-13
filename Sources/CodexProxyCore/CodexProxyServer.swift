@@ -201,7 +201,7 @@ public final class CodexProxyServer: @unchecked Sendable {
 
     private func handleResponses(_ request: HTTPRequest, settings: ProxySettings, connection: NWConnection, compact: Bool) async throws -> HTTPResponse? {
         let original = try JSONHelper.object(from: request.body)
-        let model = JSONHelper.string(original["model"]) ?? settings.defaultModelID
+        let model = try Self.requiredModel(in: original)
         let clientWantsStream = JSONHelper.bool(original["stream"])
         let upstreamPath = compact ? "/responses/compact" : "/responses"
         var upstreamBody = OpenAICompatTranslator.responsesToCodex(original, model: model, stream: !compact)
@@ -232,7 +232,7 @@ public final class CodexProxyServer: @unchecked Sendable {
 
     private func handleChatCompletions(_ request: HTTPRequest, settings: ProxySettings, connection: NWConnection) async throws -> HTTPResponse? {
         let original = try JSONHelper.object(from: request.body)
-        let model = JSONHelper.string(original["model"]) ?? settings.defaultModelID
+        let model = try Self.requiredModel(in: original)
         let clientWantsStream = JSONHelper.bool(original["stream"])
         var upstreamBody = OpenAICompatTranslator.chatCompletionsToCodex(original, model: model, stream: true)
         if settings.injectImageGenerationTool {
@@ -254,9 +254,10 @@ public final class CodexProxyServer: @unchecked Sendable {
 
     private func handleCompletions(_ request: HTTPRequest, settings: ProxySettings, connection: NWConnection) async throws -> HTTPResponse? {
         let original = try JSONHelper.object(from: request.body)
+        let model = try Self.requiredModel(in: original)
         let prompt = JSONHelper.string(original["prompt"]) ?? "Complete this:"
         var chat: JSONObject = [
-            "model": JSONHelper.string(original["model"]) ?? settings.defaultModelID,
+            "model": model,
             "stream": JSONHelper.bool(original["stream"]),
             "messages": [[
                 "role": "user",
@@ -282,7 +283,7 @@ public final class CodexProxyServer: @unchecked Sendable {
 
     private func handleAnthropicMessages(_ request: HTTPRequest, settings: ProxySettings, connection: NWConnection) async throws -> HTTPResponse? {
         let original = try JSONHelper.object(from: request.body)
-        let model = JSONHelper.string(original["model"]) ?? settings.defaultModelID
+        let model = try Self.requiredModel(in: original)
         let clientWantsStream = JSONHelper.bool(original["stream"])
         let upstreamBody = AnthropicCompatTranslator.messagesToCodex(original, model: model, stream: true)
 
@@ -323,7 +324,7 @@ public final class CodexProxyServer: @unchecked Sendable {
         ]
         try await connection.sendData(HTTPParser.streamHeader(headers: headers))
 
-        let requestedModel = JSONHelper.string(upstreamBody["model"]) ?? settings.defaultModelID
+        let requestedModel = try Self.requiredModel(in: upstreamBody)
         var decoder = SSEDecoder()
         var accumulator = CodexCompletedAccumulator()
         for try await byte in stream.bytes {
@@ -464,6 +465,14 @@ public final class CodexProxyServer: @unchecked Sendable {
             "object": "list",
             "data": models.map(\.openAIModelObject)
         ]
+    }
+
+    static func requiredModel(in payload: JSONObject) throws -> String {
+        let model = JSONHelper.string(payload["model"])?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        guard !model.isEmpty else {
+            throw ProxyError.badRequest("model is required")
+        }
+        return model
     }
 
     private func anthropicModelsPayload(models: [CodexModelDescriptor]) -> JSONObject {

@@ -23,7 +23,6 @@ public struct ProxySettings: Codable, Equatable, Sendable {
     public var codexClientVersion: String
     public var defaultUserAgent: String
     public var originator: String
-    public var modelIDs: [String]
     public var injectImageGenerationTool: Bool
 
     private enum CodingKeys: String, CodingKey {
@@ -41,7 +40,6 @@ public struct ProxySettings: Codable, Equatable, Sendable {
         case codexClientVersion
         case defaultUserAgent
         case originator
-        case modelIDs
         case injectImageGenerationTool
     }
 
@@ -60,7 +58,6 @@ public struct ProxySettings: Codable, Equatable, Sendable {
         codexClientVersion: String = ProxySettings.defaultCodexClientVersion,
         defaultUserAgent: String = ProxySettings.codexUserAgent,
         originator: String = ProxySettings.codexOriginator,
-        modelIDs: [String] = CodexModelCatalog.defaultModelIDs,
         injectImageGenerationTool: Bool = true
     ) {
         self.listenHost = listenHost
@@ -77,7 +74,6 @@ public struct ProxySettings: Codable, Equatable, Sendable {
         self.codexClientVersion = Self.normalizedClientVersion(codexClientVersion)
         self.defaultUserAgent = defaultUserAgent
         self.originator = originator
-        self.modelIDs = modelIDs
         self.injectImageGenerationTool = injectImageGenerationTool
     }
 
@@ -98,7 +94,6 @@ public struct ProxySettings: Codable, Equatable, Sendable {
             codexClientVersion: Self.normalizedClientVersion(try container.decodeIfPresent(String.self, forKey: .codexClientVersion)),
             defaultUserAgent: Self.updatedUserAgent(try container.decodeIfPresent(String.self, forKey: .defaultUserAgent)),
             originator: Self.updatedOriginator(try container.decodeIfPresent(String.self, forKey: .originator)),
-            modelIDs: try container.decodeIfPresent([String].self, forKey: .modelIDs) ?? CodexModelCatalog.defaultModelIDs,
             injectImageGenerationTool: try container.decodeIfPresent(Bool.self, forKey: .injectImageGenerationTool) ?? true
         )
     }
@@ -109,30 +104,6 @@ public struct ProxySettings: Codable, Equatable, Sendable {
 
     public var openAIBaseURL: String {
         "\(baseURL)/v1"
-    }
-
-    public var codexPlanType: String {
-        Self.idTokenClaims(idToken).planType
-    }
-
-    public var usesAutomaticModelCatalog: Bool {
-        CodexModelCatalog.isAutomaticModelList(modelIDs)
-    }
-
-    public var effectiveModelDescriptors: [CodexModelDescriptor] {
-        CodexModelCatalog.models(modelIDs: modelIDs, planType: codexPlanType)
-    }
-
-    public var effectiveModelIDs: [String] {
-        effectiveModelDescriptors.map(\.id)
-    }
-
-    public var defaultModelID: String {
-        let modelIDs = effectiveModelIDs
-        if modelIDs.contains(CodexModelCatalog.defaultModelID) {
-            return CodexModelCatalog.defaultModelID
-        }
-        return modelIDs.first ?? CodexModelCatalog.defaultModelID
     }
 
     public var normalizedUpstreamBaseURL: String {
